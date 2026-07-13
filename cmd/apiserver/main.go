@@ -12,26 +12,38 @@ import (
 	emailVerifier "github.com/AfterShip/email-verifier"
 )
 
-func GetEmailVerification(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	verifier := emailVerifier.NewVerifier()
+var verifier = emailVerifier.
+	NewVerifier().
+	EnableSMTPCheck().
+	EnableDomainSuggest().
+	FromEmail("hello@syncoretech.com").
+	HelloName("syncoretech.com")
+
+func GetEmailVerification(
+	w http.ResponseWriter,
+	r *http.Request,
+	ps httprouter.Params,
+) {
 	ret, err := verifier.Verify(ps.ByName("email"))
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
 	if !ret.Syntax.Valid {
-		_, _ = fmt.Fprint(w, "email address syntax is invalid")
+		http.Error(w, "email address syntax is invalid", http.StatusBadRequest)
 		return
 	}
 
-	bytes, err := json.Marshal(ret)
+	w.Header().Set("Content-Type", "application/json")
+
+	response, err := json.Marshal(ret)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	_, _ = fmt.Fprint(w, string(bytes))
-
+	_, _ = fmt.Fprint(w, string(response))
 }
 
 func main() {
@@ -40,11 +52,12 @@ func main() {
 	router.GET("/v1/:email/verification", GetEmailVerification)
 
 	server := &http.Server{
-		Addr:         ":8080",
+		Addr:         "127.0.0.1:8080",
 		Handler:      router,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
 
+	log.Println("Email verifier running at http://127.0.0.1:8080")
 	log.Fatal(server.ListenAndServe())
 }

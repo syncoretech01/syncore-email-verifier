@@ -1,4 +1,12 @@
-.idea/
 .vscode/
 vendor/
 covprofile
+
+# Syncore local development
+*.exe
+.env
+.env.local
+*.log
+output/
+tmp/
+data/private/
