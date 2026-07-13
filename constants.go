@@ -21,4 +21,38 @@ const (
 	domainThreshold      float32 = 0.82
 	secondLevelThreshold float32 = 0.82
 	topLevelThreshold    float32 = 0.6
+
+	// MailHostSource values describe how the domain's mail host was resolved.
+	mailHostSourceMX   = "mx"
+	mailHostSourceA    = "a"
+	mailHostSourceAAAA = "aaaa"
+	mailHostSourceNull = "null"
+	mailHostSourceNone = "none"
+
+	// RecipientResult values (coarse per-recipient SMTP/API outcome).
+	recipientAccepted   = "accepted"
+	recipientRejected   = "rejected"
+	recipientTemporary  = "temporary"
+	recipientBlocked    = "blocked"
+	recipientUnknown    = "unknown"
+	recipientNotChecked = "not_checked"
+
+	// RecipientReason values (normalized fine-grained recipient reason).
+	reasonMailboxNotFound  = "mailbox_not_found"
+	reasonMailboxDisabled  = "mailbox_disabled"
+	reasonFullInbox        = "full_inbox"
+	reasonPolicyBlock      = "policy_block"
+	reasonRateLimited      = "rate_limited"
+	reasonTemporaryFailure = "temporary_failure"
+	reasonGreylisted       = "greylisted"
+
+	// CatchAllResult values (tri-state catch-all evidence).
+	catchAllConfirmed  = "confirmed"
+	catchAllNot        = "not_catch_all"
+	catchAllUnknown    = "unknown"
+	catchAllNotChecked = "not_checked"
+
+	// Source values (verification source).
+	sourceSMTP = "smtp"
+	sourceAPI  = "api"
 )

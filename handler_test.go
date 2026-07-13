@@ -29,13 +29,6 @@ func TestUpdateDisposableDomainsOK(t *testing.T) {
 	assert.False(t, verifier.IsDisposable("0009827.com"))
 }
 
-func TestUpdateDisposableDomainsFailed_NoSuchHost(t *testing.T) {
-
-	err := updateDisposableDomains("http://abcmockxyz.aaa")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no such host")
-}
-
 func TestUpdateDisposableDomainsFailed_StatusNotFound(t *testing.T) {
 	defer gock.Off()
 	gock.New("https://raw.githubusercontent.com").

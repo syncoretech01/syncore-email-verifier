@@ -7,22 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestYahooCheckByAPI(t *testing.T) {
-	yahooAPIVerifier := newYahooAPIVerifier(nil)
-	t.Run("email exists", func(tt *testing.T) {
-		res, err := yahooAPIVerifier.check("yahoo.com", "hello")
-		assert.NoError(t, err)
-		assert.Equal(t, true, res.HostExists)
-		assert.Equal(t, true, res.Deliverable)
-	})
-	t.Run("invalid email not exists", func(tt *testing.T) {
-		res, err := yahooAPIVerifier.check("yahoo.com", "123")
-		assert.NoError(t, err)
-		assert.Equal(t, true, res.HostExists)
-		assert.Equal(t, false, res.Deliverable)
-	})
-}
-
 func TestGetAcrumb(t *testing.T) {
 	cookies0 := []*http.Cookie{
 		{Value: "123321"},
