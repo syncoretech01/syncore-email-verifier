@@ -1,3 +1,267 @@
+# Syncore Email Verifier
+
+**Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier).**
+
+- The upstream project and its **MIT licence attribution are preserved**.
+- The **original copyright remains with AfterShip** — see [LICENSE](LICENSE).
+- The upstream library README is preserved **unchanged below the Syncore section**.
+
+Phase 1 turns the upstream reference API into a clean, local, single-instance verification service with a structured classification model. It intentionally adds **no** database, queue, retry worker, bulk upload, authentication, paid provider, frontend, or CRM integration.
+
+---
+
+## Requirements
+
+- **Go 1.22 or newer** (the version declared in [`go.mod`](go.mod)).
+
+Check your Go version:
+
+```
+go version
+```
+
+## Development (Windows-first)
+
+All commands are plain `go` invocations and work identically on Windows (PowerShell or Git Bash), macOS, and Linux. `make` is an optional convenience only (see [Makefile](Makefile)) and is **not required** on Windows.
+
+```
+go build ./...            # build everything
+go run ./cmd/apiserver    # run the API server (default http://127.0.0.1:8080)
+go test ./...             # run the deterministic test suite (primary command)
+go vet ./...              # static analysis
+```
+
+The server binds to **http://127.0.0.1:8080** by default and logs a startup line. **Stop it with `Ctrl+C`** — the process performs a graceful shutdown (drains in-flight requests, then exits).
+
+### Setting environment variables
+
+**PowerShell:**
+
+```powershell
+$env:SYNCORE_VERIFIER_SMTP_ENABLED = "true"
+$env:SYNCORE_VERIFIER_BIND_ADDR    = "127.0.0.1:8080"
+go run ./cmd/apiserver
+# later, to clear one:
+Remove-Item Env:\SYNCORE_VERIFIER_SMTP_ENABLED
+```
+
+**Git Bash:**
+
+```bash
+export SYNCORE_VERIFIER_SMTP_ENABLED=true
+export SYNCORE_VERIFIER_BIND_ADDR=127.0.0.1:8080
+go run ./cmd/apiserver
+```
+
+## Configuration
+
+Configuration comes **only from process environment variables**. `.env.example` is **documentation only** — the service does **not** load `.env`, and there is **no dotenv dependency**. Invalid configuration fails fast at startup (before the server binds), naming the offending variable and expected format.
+
+| Variable | Purpose | Default | Format | Required | Validation |
+|---|---|---|---|---|---|
+| `SYNCORE_VERIFIER_BIND_ADDR` | HTTP bind address | `127.0.0.1:8080` | `host:port` | No | Must parse as `host:port`; port numeric, `0`–`65535`. |
+| `SYNCORE_VERIFIER_SMTP_ENABLED` | Enable mailbox-level SMTP checks | `true` | boolean | No | Must parse as a boolean (`true`/`false`). |
+| `SYNCORE_VERIFIER_FROM_EMAIL` | `MAIL FROM` address for SMTP | `hello@syncoretech.com` | email | No | **Only when SMTP is enabled**: must be a valid email address. |
+| `SYNCORE_VERIFIER_HELLO_NAME` | `EHLO`/`HELO` name for SMTP | `syncoretech.com` | hostname | No | **Only when SMTP is enabled**: non-empty, no whitespace or control characters. |
+| `SYNCORE_VERIFIER_CONNECT_TIMEOUT` | TCP connect timeout for SMTP dialing | `10s` | Go duration | No | Must parse as a duration and be `> 0`. |
+| `SYNCORE_VERIFIER_OPERATION_TIMEOUT` | SMTP operation deadline | `10s` | Go duration | No | Must parse as a duration and be `> 0`. |
+| `SYNCORE_VERIFIER_DISPOSABLE_AUTOUPDATE` | Refresh disposable-domain list daily | `false` | boolean | No | Must parse as a boolean. |
+| `SYNCORE_VERIFIER_DOMAIN_SUGGEST` | Suggest a likely-correct domain for typos | `true` | boolean | No | Must parse as a boolean. |
+| `SYNCORE_VERIFIER_MAX_BODY_BYTES` | Maximum accepted `POST` body size (bytes) | `4096` | positive integer | No | Must be a positive integer. |
+
+`FROM_EMAIL` and `HELLO_NAME` are **validated only when `SMTP_ENABLED=true`**. When SMTP is disabled they are unused and will not block startup even if malformed.
+
+## HTTP API
+
+Three endpoints. Every response is JSON.
+
+### `GET /health`
+
+Liveness only — performs **no** DNS, SMTP, or provider checks.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/health
+```
+```bash
+curl.exe http://127.0.0.1:8080/health     # Windows
+curl      http://127.0.0.1:8080/health     # Git Bash
+```
+```json
+{ "status": "ok" }
+```
+
+### `GET /v1/{email}/verification`
+
+The **preserved legacy endpoint**, extended: it returns all legacy response fields (`email`, `reachable`, `syntax`, `smtp`, `gravatar`, `suggestion`, `disposable`, `role_account`, `free`, `has_mx_records`) plus the Phase 1A additive evidence (`null_mx`, `mail_host_source`, and — inside `smtp` — `recipient_result`, `recipient_reason`, `smtp_code`, `catch_all_result`, `source`) and **appends** the Phase 1 classification: `status`, `reason_code`, `retryable`, `confidence`, `checked_at`, `smtp_attempted`, `smtp_check_reason`, `source`, `error`.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/v1/person@example.com/verification
+```
+```bash
+curl.exe "http://127.0.0.1:8080/v1/person@example.com/verification"
+```
+
+### `POST /v1/verifications`
+
+The structured endpoint. Request body:
+
+```json
+{ "email": "person@example.com" }
+```
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/v1/verifications `
+  -ContentType 'application/json' -Body '{"email":"person@example.com"}'
+```
+```bash
+# Windows curl.exe
+curl.exe -s -X POST -H "Content-Type: application/json" -d "{\"email\":\"person@example.com\"}" http://127.0.0.1:8080/v1/verifications
+# Git Bash
+curl -s -X POST -H 'Content-Type: application/json' -d '{"email":"person@example.com"}' http://127.0.0.1:8080/v1/verifications
+```
+
+Structured response:
+
+```json
+{
+  "email": "person@example.com",
+  "status": "valid",
+  "reason_code": "smtp_accepted",
+  "retryable": false,
+  "confidence": 95,
+  "checked_at": "2026-07-13T19:05:29Z",
+  "source": "smtp",
+  "syntax": { "username": "person", "domain": "example.com", "valid": true },
+  "domain": {
+    "has_mx_records": true, "null_mx": false, "implicit_mx": false,
+    "mail_host_source": "mx", "disposable": false, "free_provider": false, "suggestion": ""
+  },
+  "account": { "role_account": false },
+  "smtp": {
+    "host_exists": true, "deliverable": true, "catch_all": false, "catch_all_result": "not_catch_all",
+    "full_inbox": false, "disabled": false, "recipient_result": "accepted", "recipient_reason": "",
+    "smtp_code": 250, "smtp_attempted": true, "smtp_check_reason": "attempted"
+  },
+  "error": null
+}
+```
+
+### Classification model
+
+`status` is one of **`valid`**, **`invalid`**, **`risky`**, **`unknown`**, backed by a `reason_code` with fixed `retryable` and `confidence` (0–100):
+
+| reason_code | status | retryable | confidence |
+|---|---|---|---|
+| `smtp_accepted` | valid | false | 95 |
+| `syntax_invalid` | invalid | false | 100 |
+| `domain_not_found` | invalid | false | 99 |
+| `null_mx` | invalid | false | 99 |
+| `no_mail_host` | invalid | false | 95 |
+| `mailbox_rejected` | invalid | false | 90 |
+| `disposable_domain` | risky | false | 90 |
+| `mailbox_disabled` | risky | false | 80 |
+| `role_account` | risky | false | 70 |
+| `full_inbox` | risky | true | 60 |
+| `catch_all` | risky | false | 50 |
+| `temporary_rejection` | unknown | true | 20 |
+| `rate_limited` | unknown | true | 15 |
+| `provider_blocked` | unknown | true | 15 |
+| `dns_error` | unknown | true | 10 |
+| `smtp_timeout` | unknown | true | 10 |
+| `connection_refused` | unknown | true | 10 |
+| `smtp_inconclusive` | unknown | true | 5 |
+| `smtp_disabled` | unknown | false | 30 |
+
+**Evidence fields:**
+- **`source`** — how deliverability was checked: `smtp` (port-25 conversation), `api` (Gmail/Yahoo API path), or empty when SMTP was not attempted.
+- **SMTP evidence** — `host_exists`, `deliverable`, `full_inbox`, `disabled`, plus the recipient-level `recipient_result` (`accepted` / `rejected` / `temporary` / `blocked` / `unknown` / `not_checked`), `recipient_reason`, and sanitized `smtp_code`.
+- **Tri-state catch-all** — `catch_all_result` is one of `confirmed`, `not_catch_all`, `unknown`, or `not_checked`. A timeout, temporary rejection, or provider block during the catch-all probe yields **`unknown`** — it is **never** reported as `catch_all=true`.
+- **MX evidence** — `has_mx_records`, `mail_host_source` (`mx` / `a` / `aaaa` / `null` / `none`), and `implicit_mx`.
+- **Null MX** — a domain publishing an RFC 7505 Null MX (`.` target) is `invalid` / `null_mx` and is **not** probed further.
+- **Implicit A/AAAA delivery** — when a domain has no MX records but has an A/AAAA record, that host is used as an implicit mail exchanger (`mail_host_source` = `a` or `aaaa`); the absence of an explicit MX record alone is **not** treated as invalid.
+
+## HTTP response behavior
+
+| Situation | Status |
+|---|---|
+| Any completed verification (`valid`/`invalid`/`risky`/`unknown`, incl. invalid syntax, timeouts, Null MX, no mail host) | **200** |
+| Malformed request structure (bad/duplicate JSON, unknown field, missing/empty/over-254-byte/control-character email) | **400** |
+| Unknown route | **404** |
+| Unsupported method on a known route | **405** (with `Allow` header) |
+| Request body larger than `MAX_BODY_BYTES` | **413** |
+| Missing or non-JSON `Content-Type` | **415** |
+| Genuine unexpected internal fault | **500** |
+
+Error responses use a consistent envelope and never leak raw SMTP text, IP addresses, proxy URLs, credentials, or stack traces:
+
+```json
+{ "error": { "code": "invalid_request", "message": "..." } }
+```
+
+**Invalid email syntax is a completed result, not a request error:** a well-formed request whose email merely fails syntax validation returns **HTTP 200** with `status = "invalid"` and `reason_code = "syntax_invalid"`.
+
+## Interpreting results
+
+The classification is an input to your outreach decisions, not a delivery guarantee:
+
+- **`valid`** — suitable for normal outreach handling.
+- **`invalid`** — suppress.
+- **`risky`** — review, or use cautiously.
+- **`unknown` with `retryable = true`** — retry later.
+- **`unknown` with `retryable = false`** — leave unresolved or review manually.
+
+**`valid` does not guarantee** message delivery, inbox placement, recipient engagement, or the absence of spam filtering. It means the receiving server accepted the recipient at check time.
+
+## SMTP limitations
+
+Mailbox checks are performed honestly over **SMTP port 25**, and:
+
+- Outbound port 25 is frequently **blocked** by residential, office, ISP, and cloud networks. When it is blocked, mailbox checks cannot complete.
+- **Gmail commonly works** from a given host while **Microsoft, Yahoo, or Apple time out** on the same host.
+- **Timeouts, temporary rejections, and provider blocking become `unknown` — never `invalid`.**
+- **No email message is ever sent.**
+- Receiving providers may **intentionally conceal** whether a mailbox exists (e.g. catch-all, greylisting, uniform responses).
+- **Verification results can change over time** — re-checking later can yield a different outcome.
+
+## Timeouts & cancellation
+
+- **`SYNCORE_VERIFIER_CONNECT_TIMEOUT`** bounds each SMTP TCP connect.
+- **`SYNCORE_VERIFIER_OPERATION_TIMEOUT`** is a single deadline covering the SMTP conversation (`HELO`/`MAIL`/`RCPT`) after connecting.
+- The HTTP server's **`WriteTimeout`** is derived from configuration so it never truncates a legitimate verification: it is at least **`ConnectTimeout + OperationTimeout + 15s`, with a 35-second floor**.
+- **Request cancellation (client disconnect) does not currently stop an in-flight DNS or SMTP operation.** The real bound is the engine's own connect/operation deadlines.
+- **DNS relies on the operating-system resolver's behavior** and has no separate application timeout.
+
+These are **known Phase 1 limitations**.
+
+## Testing
+
+The default suite is deterministic and contacts **no** public network:
+
+```
+go test ./...
+```
+
+Race detector (see the note below on Windows):
+
+```
+go test -race ./...
+```
+
+Live tests — **these contact public DNS, SMTP, HTTP, and provider services** (Gmail/Yahoo/etc.) and are excluded from the default suite:
+
+```
+go test -tags=live ./...
+```
+
+**Race detector on Windows** requires:
+
+- `CGO_ENABLED=1`, and
+- a compatible C compiler such as **MinGW-w64 GCC** on `PATH`.
+
+If a C compiler is not installed, `go test -race ./...` cannot run on Windows. **Linux CI is the authoritative race-detector run** (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)); do not treat a local Windows run as authoritative.
+
+---
+
 # email-verifier
 
 ✉️ A Go library for email verification without sending any emails.

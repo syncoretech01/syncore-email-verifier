@@ -12,33 +12,51 @@ on:
       - main
 
 jobs:
-  lint-build-test:
-    name: Lint/Test
-
+  build-vet-test:
+    name: Build/Vet/Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.22.x']
 
     steps:
-
       - name: Checkout Code Base
         uses: actions/checkout@v4
 
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{matrix.go-version}}
+          # Use the version declared in go.mod.
+          go-version-file: 'go.mod'
 
-      - name: Lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.2.1
-          only-new-issues: true
+      - name: Check formatting (CRLF-safe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Check only tracked Go files, normalizing line endings so a CRLF-vs-LF
+          # difference (this repo is developed on Windows) never produces a false
+          # gofmt failure. Machine-generated files (the Go "// Code generated ...
+          # DO NOT EDIT." convention) are skipped so pre-generated metadata cannot
+          # cause a false positive. Only genuine formatting problems fail.
+          bad=""
+          while IFS= read -r f; do
+            if head -n 5 "$f" | grep -qE '^// Code generated .* DO NOT EDIT\.$'; then
+              continue
+            fi
+            if ! diff -q <(gofmt "$f" | tr -d '\r') <(tr -d '\r' < "$f") >/dev/null; then
+              bad="$bad $f"
+            fi
+          done < <(git ls-files '*.go')
+          if [ -n "$bad" ]; then
+            echo "The following files are not gofmt-clean:$bad"
+            exit 1
+          fi
 
-      - name: Test
-        run: make test
+      - name: Vet
+        run: go vet ./...
 
+      - name: Build
+        run: go build ./...
 
+      - name: Test (deterministic, no public network)
+        run: go test ./...
 
-
+      - name: Test (race detector)
+        run: go test -race ./...

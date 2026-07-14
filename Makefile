@@ -1,19 +1,22 @@
-PKG_FILES=`go list ./... | sed -e 's=github.com/AfterShip/emailverifier/=./='`
+# Optional convenience targets. None are required: every target is a plain `go`
+# command you can run directly (see README). Windows users do not need `make`.
 
-CCCOLOR="\033[37;1m"
-MAKECOLOR="\033[32;1m"
-ENDCOLOR="\033[0m"
+.PHONY: build vet test test-race test-live
 
-.PHONY: all
+build:
+	go build ./...
 
+vet:
+	go vet ./...
+
+# Primary, deterministic, cross-platform test suite (no public network).
 test:
-	@go test -race -covermode atomic -coverprofile=covprofile ./...
+	go test ./...
 
-detect_race:
-	@go test -v -race
+# Race detector. Requires CGO_ENABLED=1 and a C compiler; authoritative in Linux CI.
+test-race:
+	go test -race ./...
 
-lint:
-	@printf $(CCCOLOR)"Checking vet...\n"$(ENDCOLOR)
-	@go vet .
-	@printf $(CCCOLOR)"GolangCI Lint...\n"$(ENDCOLOR)
-	@golangci-lint run
+# Live tests that contact public DNS/SMTP/HTTP/provider services (excluded by default).
+test-live:
+	go test -tags=live ./...
