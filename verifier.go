@@ -2,7 +2,9 @@ package emailverifier
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"net/smtp"
 	"time"
 )
 
@@ -21,6 +23,14 @@ type Verifier struct {
 	// Timeouts
 	connectTimeout   time.Duration // Timeout for establishing connections
 	operationTimeout time.Duration // Timeout for SMTP operations (e.g., EHLO, MAIL FROM, etc.)
+
+	// Instance-scoped network dependencies. Defaulted in NewVerifier to the real
+	// net/smtp functions; overridable per-instance (e.g. by tests) without any
+	// mutable package-level global. The dial dependency keeps the proxyURI
+	// parameter so Verifier.Proxy() continues to work through the default dialer.
+	lookupMX func(name string) ([]*net.MX, error)
+	lookupIP func(host string) ([]net.IP, error)
+	dial     func(addr, proxyURI string, connectTimeout, operationTimeout time.Duration) (*smtp.Client, error)
 }
 
 // Result is the result of Email Verification
@@ -35,6 +45,10 @@ type Result struct {
 	RoleAccount  bool      `json:"role_account"`   // is account a role-based account
 	Free         bool      `json:"free"`           // is domain a free email domain
 	HasMxRecords bool      `json:"has_mx_records"` // whether or not MX-Records for the domain
+
+	// Additive Syncore evidence (does not remove or rename existing fields).
+	NullMX         bool   `json:"null_mx"`          // domain publishes an RFC 7505 Null MX ("." target)
+	MailHostSource string `json:"mail_host_source"` // how the mail host was resolved: mx|a|aaaa|null|none
 }
 
 // additional list of disposable domains set via users of this library
@@ -56,6 +70,9 @@ func NewVerifier() *Verifier {
 		apiVerifiers:         map[string]smtpAPIVerifier{},
 		connectTimeout:       10 * time.Second,
 		operationTimeout:     10 * time.Second,
+		lookupMX:             net.LookupMX,
+		lookupIP:             net.LookupIP,
+		dial:                 dialSMTP,
 	}
 }
 
@@ -86,6 +103,11 @@ func (v *Verifier) Verify(email string) (*Result, error) {
 	}
 
 	mx, err := v.CheckMX(syntax.Domain)
+	if mx != nil {
+		ret.HasMxRecords = mx.HasMXRecord
+		ret.NullMX = mx.NullMX
+		ret.MailHostSource = mx.MailHostSource
+	}
 	if err != nil {
 		errStr := err.Error()
 		if insContains(errStr, "no such host") {
@@ -94,7 +116,14 @@ func (v *Verifier) Verify(email string) (*Result, error) {
 		}
 		return &ret, err
 	}
-	ret.HasMxRecords = mx.HasMXRecord
+
+	// A Null MX (RFC 7505) domain explicitly refuses mail, and a domain with no
+	// usable MX and no A/AAAA mail host cannot receive mail. In both cases there
+	// is nothing to probe over SMTP.
+	if mx.NullMX || mx.MailHostSource == mailHostSourceNone {
+		ret.Reachable = reachableNo
+		return &ret, nil
+	}
 
 	smtp, err := v.CheckSMTP(syntax.Domain, syntax.Username)
 	if err != nil {

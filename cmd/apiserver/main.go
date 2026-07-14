@@ -1,63 +1,91 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/julienschmidt/httprouter"
-
-	emailVerifier "github.com/AfterShip/email-verifier"
+	emailverifier "github.com/AfterShip/email-verifier"
+	"github.com/AfterShip/email-verifier/internal/config"
+	"github.com/AfterShip/email-verifier/internal/verification"
 )
 
-var verifier = emailVerifier.
-	NewVerifier().
-	EnableSMTPCheck().
-	EnableDomainSuggest().
-	FromEmail("hello@syncoretech.com").
-	HelloName("syncoretech.com")
-
-func GetEmailVerification(
-	w http.ResponseWriter,
-	r *http.Request,
-	ps httprouter.Params,
-) {
-	ret, err := verifier.Verify(ps.ByName("email"))
+func main() {
+	cfg, err := config.Load()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		// Fail before binding the server; the message names the offending
+		// variable and expected format without exposing secrets.
+		log.Fatalf("configuration error: %v", err)
 	}
 
-	if !ret.Syntax.Valid {
-		http.Error(w, "email address syntax is invalid", http.StatusBadRequest)
-		return
+	// One reusable verifier and one reusable verification service.
+	engine := buildVerifier(cfg)
+	svc := verification.NewService(
+		engine,
+		verification.WithSMTPEnabled(cfg.SMTPEnabled),
+		verification.WithClock(func() time.Time { return time.Now().UTC() }),
+	)
+	handlers := newHandlers(svc, cfg.MaxBodyBytes)
+	server := newServer(cfg, handlers)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		log.Printf("Syncore email verifier listening on http://%s", cfg.BindAddr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+	}()
+
+	select {
+	case err := <-serveErr:
+		// e.g. the bind address is unavailable. Exit non-zero from the main
+		// goroutine (never log.Fatal from the serving goroutine).
+		log.Printf("server error: %v", err)
+		os.Exit(1)
+	case <-ctx.Done():
+		log.Println("shutdown signal received, draining connections")
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-
-	response, err := json.Marshal(ret)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown error: %v", err)
 	}
-
-	_, _ = fmt.Fprint(w, string(response))
 }
 
-func main() {
-	router := httprouter.New()
+// buildVerifier constructs a single reusable verifier from configuration. SOCKS
+// proxy support remains available via the engine's Proxy option; Phase 1C does
+// not add a proxy environment variable.
+func buildVerifier(cfg *config.Config) *emailverifier.Verifier {
+	v := emailverifier.NewVerifier()
 
-	router.GET("/v1/:email/verification", GetEmailVerification)
-
-	server := &http.Server{
-		Addr:         "127.0.0.1:8080",
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+	if cfg.SMTPEnabled {
+		v.EnableSMTPCheck()
+	} else {
+		v.DisableSMTPCheck()
 	}
 
-	log.Println("Email verifier running at http://127.0.0.1:8080")
-	log.Fatal(server.ListenAndServe())
+	v.FromEmail(cfg.FromEmail)
+	v.HelloName(cfg.HelloName)
+	v.ConnectTimeout(cfg.ConnectTimeout)
+	v.OperationTimeout(cfg.OperationTimeout)
+
+	if cfg.DomainSuggest {
+		v.EnableDomainSuggest()
+	} else {
+		v.DisableDomainSuggest()
+	}
+	if cfg.DisposableAutoUpdate {
+		v.EnableAutoUpdateDisposable()
+	}
+
+	return v
 }

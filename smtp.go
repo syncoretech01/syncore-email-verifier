@@ -9,7 +9,6 @@ import (
 	"net/smtp"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -19,9 +18,16 @@ import (
 type SMTP struct {
 	HostExists  bool `json:"host_exists"` // is the host exists?
 	FullInbox   bool `json:"full_inbox"`  // is the email account's inbox full?
-	CatchAll    bool `json:"catch_all"`   // does the domain have a catch-all email address?
-	Deliverable bool `json:"deliverable"` // can send an email to the email server?
+	CatchAll    bool `json:"catch_all"`   // does the domain have a catch-all email address? (true only when confirmed)
+	Deliverable bool `json:"deliverable"` // can send an email to the email server? (true only when accepted)
 	Disabled    bool `json:"disabled"`    // is the email blocked or disabled by the provider?
+
+	// Additive Syncore recipient evidence.
+	RecipientResult string `json:"recipient_result"` // accepted|rejected|temporary|blocked|unknown|not_checked
+	RecipientReason string `json:"recipient_reason"` // normalized recipient reason (see reason* constants)
+	SMTPCode        int    `json:"smtp_code"`        // sanitized numeric RCPT reply code (0 when none)
+	CatchAllResult  string `json:"catch_all_result"` // confirmed|not_catch_all|unknown|not_checked
+	Source          string `json:"source"`           // verification source: smtp|api
 }
 
 // CheckSMTP performs an email verification on the passed domain via SMTP
@@ -34,12 +40,16 @@ func (v *Verifier) CheckSMTP(domain, username string) (*SMTP, error) {
 		return nil, nil
 	}
 
-	var ret SMTP
+	ret := SMTP{
+		RecipientResult: recipientNotChecked,
+		CatchAllResult:  catchAllNotChecked,
+		Source:          sourceSMTP,
+	}
 	var err error
 	email := fmt.Sprintf("%s@%s", username, domain)
 
 	// Dial any SMTP server that will accept a connection
-	client, mx, err := newSMTPClient(domain, v.proxyURI, v.connectTimeout, v.operationTimeout)
+	client, mx, err := v.newSMTPClient(domain)
 	if err != nil {
 		return &ret, ParseSMTPError(err)
 	}
@@ -67,35 +77,35 @@ func (v *Verifier) CheckSMTP(domain, username string) (*SMTP, error) {
 	// Host exists if we've successfully formed a connection
 	ret.HostExists = true
 
-	// Default sets catch-all to true
-	ret.CatchAll = true
-
 	if v.catchAllCheckEnabled {
-		// Checks the deliver ability of a randomly generated address in
-		// order to verify the existence of a catch-all and etc.
+		// Probe a randomly generated address to determine tri-state catch-all
+		// evidence. Do NOT default CatchAll to true: only a confirmed accept
+		// makes it a catch-all; a timeout / temporary / policy reply is unknown.
 		randomEmail := GenerateRandomEmail(domain)
-		if err = client.Rcpt(randomEmail); err != nil {
-			if e := ParseSMTPError(err); e != nil {
-				switch e.Message {
-				case ErrFullInbox:
-					ret.FullInbox = true
-				case ErrNotAllowed:
-					ret.Disabled = true
-				// If The client typically receives a `550 5.1.1` code as a reply to RCPT TO command,
-				// In most cases, this is because the recipient address does not exist.
-				case ErrServerUnavailable:
-					ret.CatchAll = false
-				default:
-
-				}
-
-			}
+		result, reason, _, transportErr := classifyRecipientReply(client.Rcpt(randomEmail))
+		switch {
+		case result == recipientAccepted:
+			ret.CatchAllResult = catchAllConfirmed
+			ret.CatchAll = true
+		case result == recipientRejected && reason == reasonMailboxNotFound:
+			// A clean nonexistent-recipient rejection proves the server is not a
+			// catch-all; continue to probe the real recipient.
+			ret.CatchAllResult = catchAllNot
+		default:
+			// Temporary rejection, policy block, timeout or ambiguous reply: we
+			// cannot claim the domain is catch-all.
+			ret.CatchAllResult = catchAllUnknown
 		}
 
-		// If the email server is a catch-all email server,
-		// no need to calibrate deliverable on a specific user
-		if ret.CatchAll {
+		// A confirmed catch-all server accepts everything; no need to calibrate
+		// deliverability on a specific user.
+		if ret.CatchAllResult == catchAllConfirmed {
 			return &ret, nil
+		}
+		// A transport failure (timeout / refused) during the probe compromises the
+		// connection; surface it as an identifiable error rather than continuing.
+		if transportErr != nil {
+			return &ret, transportErr
 		}
 	}
 
@@ -105,78 +115,109 @@ func (v *Verifier) CheckSMTP(domain, username string) (*SMTP, error) {
 		return &ret, nil
 	}
 
-	if err = client.Rcpt(email); err == nil {
+	// Capture the real-recipient RCPT result as normalized evidence.
+	result, reason, code, transportErr := classifyRecipientReply(client.Rcpt(email))
+	ret.RecipientResult = result
+	ret.RecipientReason = reason
+	ret.SMTPCode = code
+	switch result {
+	case recipientAccepted:
 		ret.Deliverable = true
+	case recipientRejected, recipientTemporary:
+		if reason == reasonFullInbox {
+			ret.FullInbox = true
+		}
+		if reason == reasonMailboxDisabled {
+			ret.Disabled = true
+		}
+	}
+	if transportErr != nil {
+		// Preserve the partial evidence gathered above alongside the identifiable
+		// transport error (e.g. a real-recipient timeout).
+		return &ret, transportErr
 	}
 
 	return &ret, nil
 }
 
-// newSMTPClient generates a new available SMTP client
-func newSMTPClient(domain, proxyURI string, connectTimeout, operationTimeout time.Duration) (*smtp.Client, *net.MX, error) {
+// mxDialResult carries the outcome of a single MX dial attempt.
+type mxDialResult struct {
+	client *smtp.Client
+	mx     *net.MX
+	err    error
+}
+
+// newSMTPClient dials the domain's mail exchangers concurrently and returns the
+// first client that connects.
+//
+// Concurrency contract: the result channel is buffered to the number of
+// candidates, so every dial goroutine can deliver its single result without ever
+// blocking — even after a winner has been chosen. There is no shared mutable
+// completion flag (hence no data race and no mutex). Once a winner is selected,
+// a background drainer consumes the remaining results and closes any additional
+// successful clients, so no goroutine and no connection leaks.
+func (v *Verifier) newSMTPClient(domain string) (*smtp.Client, *net.MX, error) {
 	domain = domainToASCII(domain)
-	mxRecords, err := net.LookupMX(domain)
+	mxRecords, _, nullMX, err := v.resolveMailHosts(domain)
 	if err != nil {
 		return nil, nil, err
+	}
+	if nullMX {
+		return nil, nil, errors.New("Null MX: domain does not accept mail")
 	}
 
 	if len(mxRecords) == 0 {
 		return nil, nil, errors.New("No MX records found")
 	}
-	// Create a channel for receiving response from
-	ch := make(chan interface{}, 1)
-	selectedMXCh := make(chan *net.MX, 1)
 
-	// Done indicates if we're still waiting on dial responses
-	var done bool
+	// Buffered to len(mxRecords): guarantees every goroutine's send succeeds
+	// without a reader, so sends never block and goroutines never leak.
+	results := make(chan mxDialResult, len(mxRecords))
 
-	// mutex for data race
-	var mutex sync.Mutex
-
-	// Attempt to connect to all SMTP servers concurrently
-	for i, r := range mxRecords {
+	// Attempt to connect to all SMTP servers concurrently.
+	for _, r := range mxRecords {
+		r := r
 		addr := r.Host + smtpPort
-		index := i
 		go func() {
-			c, err := dialSMTP(addr, proxyURI, connectTimeout, operationTimeout)
-			if err != nil {
-				if !done {
-					ch <- err
-				}
-				return
-			}
-
-			// Place the client on the channel or close it
-			mutex.Lock()
-			switch {
-			case !done:
-				done = true
-				ch <- c
-				selectedMXCh <- mxRecords[index]
-			default:
-				c.Close()
-			}
-			mutex.Unlock()
+			c, err := v.dial(addr, v.proxyURI, v.connectTimeout, v.operationTimeout)
+			results <- mxDialResult{client: c, mx: r, err: err}
 		}()
 	}
 
-	// Collect errors or return a client
-	var errs []error
-	for {
-		res := <-ch
-		switch r := res.(type) {
-		case *smtp.Client:
-			return r, <-selectedMXCh, nil
-		case error:
-			errs = append(errs, r)
-			if len(errs) == len(mxRecords) {
-				return nil, nil, errs[0]
+	var firstErr error
+	for i := 0; i < len(mxRecords); i++ {
+		res := <-results
+		if res.err != nil {
+			if firstErr == nil {
+				firstErr = res.err
 			}
-		default:
-			return nil, nil, errors.New("Unexpected response dialing SMTP server")
+			continue
 		}
+
+		// First successful connection wins. Drain the remaining results in the
+		// background, closing any later successful clients so neither goroutines
+		// nor connections leak. The buffered channel guarantees the drain (and
+		// every producer) completes without blocking.
+		if remaining := len(mxRecords) - i - 1; remaining > 0 {
+			go drainMXResults(results, remaining)
+		}
+		return res.client, res.mx, nil
 	}
 
+	// Every candidate failed. All goroutines have delivered their result to the
+	// buffered channel, so nothing is left blocked.
+	return nil, nil, firstErr
+}
+
+// drainMXResults consumes n further dial results, closing any successful clients
+// that were not selected as the winner.
+func drainMXResults(results <-chan mxDialResult, n int) {
+	for i := 0; i < n; i++ {
+		res := <-results
+		if res.err == nil && res.client != nil {
+			_ = res.client.Close()
+		}
+	}
 }
 
 // dialSMTP is a timeout wrapper for smtp.Dial. It attempts to dial an

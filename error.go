@@ -12,6 +12,7 @@ const (
 	ErrNoSuchHost        = "Mail server does not exist"
 	ErrServerUnavailable = "Mail server is unavailable"
 	ErrBlocked           = "Blocked by mail server"
+	ErrConnRefused       = "Connection refused by the mail server"
 
 	// RCPT Errors
 	ErrTryAgainLater           = "Try again later"
@@ -136,7 +137,9 @@ func parseBasicErr(err error) *LookupError {
 		"blocked",
 		"denied"):
 		return newLookupError(ErrBlocked, errStr)
-	case insContains(errStr, "timeout"):
+	case insContains(errStr, "connection refused"):
+		return newLookupError(ErrConnRefused, errStr)
+	case insContains(errStr, "timeout", "i/o timeout", "deadline exceeded"):
 		return newLookupError(ErrTimeout, errStr)
 	case insContains(errStr, "no such host"):
 		return newLookupError(ErrNoSuchHost, errStr)
@@ -145,6 +148,112 @@ func parseBasicErr(err error) *LookupError {
 	default:
 		return newLookupError(errStr, errStr)
 	}
+}
+
+// Phrase buckets used to normalize a recipient (RCPT) reply. Kept deliberately
+// tight: only strong, explicit nonexistence phrases may prove mailbox_not_found.
+var (
+	// strongNonexistentPhrases prove the recipient does not exist.
+	strongNonexistentPhrases = []string{
+		"user unknown",
+		"no such user",
+		"no such mailbox",
+		"recipient does not exist",
+		"address does not exist",
+		"invalid recipient",
+		"recipient not found",
+		"account not found",
+	}
+	// disabledPhrases indicate an existing-but-unusable mailbox.
+	disabledPhrases = []string{
+		"disabled",
+		"suspended",
+		"inactive",
+		"deactivated",
+		"no longer active",
+	}
+	// quotaPhrases indicate a full / over-quota mailbox.
+	quotaPhrases = []string{
+		"quota",
+		"full",
+		"insufficient",
+		"storage",
+		"over space",
+		"out of space",
+	}
+)
+
+// classifyRecipientReply normalizes the result of a RCPT command into structured
+// recipient evidence. It returns the coarse recipient result, the normalized
+// recipient reason, the sanitized numeric SMTP code (0 when there was no reply),
+// and a non-nil transportErr for connection-level failures (timeout / refused)
+// so those remain identifiable and never collapse into a generic unknown.
+func classifyRecipientReply(err error) (result, reason string, code int, transportErr *LookupError) {
+	if err == nil {
+		return recipientAccepted, "", 250, nil
+	}
+
+	errStr := err.Error()
+	code = parseSMTPCode(errStr)
+	if code == 0 {
+		// No SMTP reply code: this is a transport-level failure.
+		return recipientUnknown, "", 0, parseBasicErr(err)
+	}
+
+	lower := strings.ToLower(errStr)
+	switch {
+	case code >= 200 && code < 300:
+		return recipientAccepted, "", code, nil
+
+	case code >= 400 && code < 500:
+		switch code {
+		case 421, 450:
+			if insContains(lower, "greylist", "grey list", "gray list", "greylisted") {
+				return recipientTemporary, reasonGreylisted, code, nil
+			}
+			return recipientTemporary, reasonTemporaryFailure, code, nil
+		case 451:
+			return recipientTemporary, reasonRateLimited, code, nil
+		case 452:
+			if insContains(lower, quotaPhrases...) {
+				return recipientTemporary, reasonFullInbox, code, nil
+			}
+			return recipientTemporary, reasonRateLimited, code, nil
+		default:
+			return recipientTemporary, reasonTemporaryFailure, code, nil
+		}
+
+	case code >= 500:
+		// Permanent quota exhaustion (552) is a full inbox, not a rejection.
+		if code == 552 {
+			return recipientRejected, reasonFullInbox, code, nil
+		}
+		// Only strong, explicit nonexistence phrases may prove mailbox_not_found.
+		if insContains(lower, strongNonexistentPhrases...) {
+			return recipientRejected, reasonMailboxNotFound, code, nil
+		}
+		if insContains(lower, disabledPhrases...) {
+			return recipientRejected, reasonMailboxDisabled, code, nil
+		}
+		// Everything else permanent — policy, spam, reputation, blacklist, denied,
+		// blocked, and any generic/ambiguous 550/554 — is a policy block.
+		return recipientBlocked, reasonPolicyBlock, code, nil
+
+	default:
+		return recipientUnknown, "", code, nil
+	}
+}
+
+// parseSMTPCode extracts the leading 3-digit SMTP status code, or 0 if absent.
+func parseSMTPCode(s string) int {
+	if len(s) < 3 {
+		return 0
+	}
+	code, err := strconv.Atoi(string([]rune(s)[0:3]))
+	if err != nil {
+		return 0
+	}
+	return code
 }
 
 // insContains returns true if any of the substrings

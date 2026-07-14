@@ -1,3 +1,7 @@
+//go:build live
+
+// Live Gravatar tests reaching www.gravatar.com. Excluded from the default
+// deterministic suite; run with: go test -tags=live ./...
 package emailverifier
 
 import (

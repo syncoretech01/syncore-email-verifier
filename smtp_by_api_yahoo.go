@@ -54,22 +54,50 @@ func (y yahoo) isSupported(host string) bool {
 }
 
 func (y yahoo) check(domain, username string) (*SMTP, error) {
+	// Always carry the verification source. On a definitive mailbox decision the
+	// recipient result is accepted/rejected; on any API failure it is unknown
+	// (never left as not_checked).
+	ret := &SMTP{
+		Source:         sourceAPI,
+		CatchAllResult: catchAllNotChecked,
+	}
+
+	exists, err := y.mailboxExists(domain, username)
+	if err != nil {
+		ret.RecipientResult = recipientUnknown
+		return ret, err
+	}
+
+	ret.HostExists = true
+	if exists {
+		ret.Deliverable = true
+		ret.RecipientResult = recipientAccepted
+	} else {
+		ret.RecipientResult = recipientRejected
+		ret.RecipientReason = reasonMailboxNotFound
+	}
+	return ret, nil
+}
+
+// mailboxExists reports whether the Yahoo mailbox exists, using the login /
+// registration validation endpoint.
+func (y yahoo) mailboxExists(domain, username string) (bool, error) {
 	cookies, signUpPageRespBytes, err := y.toSignUpPage()
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	if len(cookies) == 0 {
-		return nil, errors.New("yahoo check by api, no cookies")
+		return false, errors.New("yahoo check by api, no cookies")
 	}
 
 	acrumb := getAcrumb(cookies)
 	if acrumb == "" {
-		return nil, errors.New("yahoo check by api, no acrumb")
+		return false, errors.New("yahoo check by api, no acrumb")
 	}
 
 	sessionIndex := getSessionIndex(signUpPageRespBytes)
 	if sessionIndex == "" {
-		return nil, errors.New("yahoo check by api, no sessionIndex")
+		return false, errors.New("yahoo check by api, no sessionIndex")
 	}
 
 	yahooErrResp, err := y.sendValidateRequest(yahooValidateReq{
@@ -80,13 +108,9 @@ func (y yahoo) check(domain, username string) (*SMTP, error) {
 		Cookies:      cookies,
 	})
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	usernameExists := checkUsernameExists(yahooErrResp)
-	return &SMTP{
-		HostExists:  true,
-		Deliverable: usernameExists,
-	}, nil
+	return checkUsernameExists(yahooErrResp), nil
 }
 
 var sessionIndexPattern = regexp.MustCompile(`value="([^"]+)" name="sessionIndex"`)
