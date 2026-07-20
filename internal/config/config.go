@@ -26,6 +26,9 @@ const (
 	EnvDomainSuggest        = "SYNCORE_VERIFIER_DOMAIN_SUGGEST"
 	EnvMaxBodyBytes         = "SYNCORE_VERIFIER_MAX_BODY_BYTES"
 	EnvAuthToken            = "SYNCORE_VERIFIER_AUTH_TOKEN"
+	EnvCacheTTL             = "SYNCORE_VERIFIER_CACHE_TTL"
+	EnvCacheTTLUnknown      = "SYNCORE_VERIFIER_CACHE_TTL_UNKNOWN"
+	EnvCacheMaxEntries      = "SYNCORE_VERIFIER_CACHE_MAX_ENTRIES"
 )
 
 // Config is the validated runtime configuration.
@@ -43,6 +46,14 @@ type Config struct {
 	// "Authorization: Bearer <token>" on every verification endpoint. Empty
 	// disables auth (only safe on a loopback bind — see validateBindSecurity).
 	AuthToken string
+	// CacheTTL is the lifetime of a cached terminal (valid/invalid) result.
+	// Zero disables the result cache entirely (default).
+	CacheTTL time.Duration
+	// CacheTTLUnknown is the lifetime of a cached retryable (unknown) result.
+	// Zero lets the cache derive min(CacheTTL, 1m).
+	CacheTTLUnknown time.Duration
+	// CacheMaxEntries bounds the in-memory result cache.
+	CacheMaxEntries int64
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -84,6 +95,15 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if cfg.MaxBodyBytes, err = parsePositiveInt(lookup, EnvMaxBodyBytes, 4096); err != nil {
+		return nil, err
+	}
+	if cfg.CacheTTL, err = parseOptionalDuration(lookup, EnvCacheTTL, 0); err != nil {
+		return nil, err
+	}
+	if cfg.CacheTTLUnknown, err = parseOptionalDuration(lookup, EnvCacheTTLUnknown, 0); err != nil {
+		return nil, err
+	}
+	if cfg.CacheMaxEntries, err = parsePositiveInt(lookup, EnvCacheMaxEntries, 10000); err != nil {
 		return nil, err
 	}
 
@@ -134,6 +154,23 @@ func parseDuration(lookup func(string) (string, bool), key string, def time.Dura
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("%s: must be greater than zero", key)
+	}
+	return d, nil
+}
+
+// parseOptionalDuration parses a Go duration that may be zero to mean "disabled".
+// Unset returns def; a negative value is rejected.
+func parseOptionalDuration(lookup func(string) (string, bool), key string, def time.Duration) (time.Duration, error) {
+	v, ok := lookup(key)
+	if !ok {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: must be a Go duration (e.g. 10m)", key)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s: must not be negative", key)
 	}
 	return d, nil
 }

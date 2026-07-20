@@ -12,6 +12,7 @@ import (
 
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/config"
+	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
 
@@ -30,7 +31,18 @@ func main() {
 		verification.WithSMTPEnabled(cfg.SMTPEnabled),
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
-	handlers := newHandlers(svc, cfg.MaxBodyBytes)
+
+	// Optional in-memory result cache: enabled only when a positive TTL is set.
+	// The handler depends on the VerificationService interface, so the cache
+	// decorator drops in transparently.
+	var vs VerificationService = svc
+	if cfg.CacheTTL > 0 {
+		cache := store.NewMemory[verification.Assessment](int(cfg.CacheMaxEntries))
+		vs = verification.NewCachingVerifier(svc, cache, cfg.CacheTTL, cfg.CacheTTLUnknown)
+		log.Printf("result cache enabled (ttl=%s, unknown_ttl=%s, max_entries=%d)", cfg.CacheTTL, cfg.CacheTTLUnknown, cfg.CacheMaxEntries)
+	}
+
+	handlers := newHandlers(vs, cfg.MaxBodyBytes)
 	server := newServer(cfg, handlers)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

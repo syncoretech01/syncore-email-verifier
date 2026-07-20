@@ -30,6 +30,9 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.True(t, cfg.DomainSuggest)
 	assert.Equal(t, int64(4096), cfg.MaxBodyBytes)
 	assert.Equal(t, "", cfg.AuthToken)
+	assert.Equal(t, time.Duration(0), cfg.CacheTTL)
+	assert.Equal(t, time.Duration(0), cfg.CacheTTLUnknown)
+	assert.Equal(t, int64(10000), cfg.CacheMaxEntries)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -44,7 +47,10 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvDomainSuggest:        "false",
 		EnvMaxBodyBytes:         "8192",
 		// A non-loopback bind requires a token (see validateBindSecurity).
-		EnvAuthToken: "override-token",
+		EnvAuthToken:       "override-token",
+		EnvCacheTTL:        "10m",
+		EnvCacheTTLUnknown: "30s",
+		EnvCacheMaxEntries: "500",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -58,6 +64,9 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.False(t, cfg.DomainSuggest)
 	assert.Equal(t, int64(8192), cfg.MaxBodyBytes)
 	assert.Equal(t, "override-token", cfg.AuthToken)
+	assert.Equal(t, 10*time.Minute, cfg.CacheTTL)
+	assert.Equal(t, 30*time.Second, cfg.CacheTTLUnknown)
+	assert.Equal(t, int64(500), cfg.CacheMaxEntries)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -84,6 +93,10 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"non-loopback bind without token", map[string]string{EnvBindAddr: "0.0.0.0:9000"}, EnvAuthToken},
 		{"all-interfaces bind without token", map[string]string{EnvBindAddr: ":9000"}, EnvAuthToken},
 		{"lan bind without token", map[string]string{EnvBindAddr: "192.168.1.10:9000"}, EnvAuthToken},
+		{"negative cache ttl", map[string]string{EnvCacheTTL: "-1m"}, EnvCacheTTL},
+		{"invalid cache ttl", map[string]string{EnvCacheTTL: "tenminutes"}, EnvCacheTTL},
+		{"invalid unknown cache ttl", map[string]string{EnvCacheTTLUnknown: "nope"}, EnvCacheTTLUnknown},
+		{"zero cache max entries", map[string]string{EnvCacheMaxEntries: "0"}, EnvCacheMaxEntries},
 	}
 
 	for _, tc := range cases {
@@ -125,6 +138,13 @@ func TestLoad_NonLoopbackBindWithTokenOK(t *testing.T) {
 		require.NoErrorf(t, err, "addr %q with token should load", addr)
 		assert.Equal(t, addr, cfg.BindAddr)
 	}
+}
+
+func TestLoad_CacheTTLZeroDisables(t *testing.T) {
+	// An explicit "0s" is accepted and means the cache stays disabled.
+	cfg, err := loadFrom(lookupFrom(map[string]string{EnvCacheTTL: "0s"}))
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), cfg.CacheTTL)
 }
 
 func TestLoad_LoopbackBindNeedsNoToken(t *testing.T) {
