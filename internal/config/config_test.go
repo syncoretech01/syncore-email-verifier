@@ -36,6 +36,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, int64(100), cfg.BatchMaxItems)
 	assert.Equal(t, int64(10), cfg.BatchConcurrency)
 	assert.Equal(t, int64(65536), cfg.BatchMaxBodyBytes)
+	assert.False(t, cfg.DomainHealth)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -57,6 +58,7 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvBatchMaxItems:     "50",
 		EnvBatchConcurrency:  "5",
 		EnvBatchMaxBodyBytes: "131072",
+		EnvDomainHealth:      "true",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -76,6 +78,7 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.Equal(t, int64(50), cfg.BatchMaxItems)
 	assert.Equal(t, int64(5), cfg.BatchConcurrency)
 	assert.Equal(t, int64(131072), cfg.BatchMaxBodyBytes)
+	assert.True(t, cfg.DomainHealth)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -109,6 +112,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"zero batch max items", map[string]string{EnvBatchMaxItems: "0"}, EnvBatchMaxItems},
 		{"negative batch concurrency", map[string]string{EnvBatchConcurrency: "-1"}, EnvBatchConcurrency},
 		{"non-integer batch body", map[string]string{EnvBatchMaxBodyBytes: "big"}, EnvBatchMaxBodyBytes},
+		{"invalid domain health bool", map[string]string{EnvDomainHealth: "maybe"}, EnvDomainHealth},
 	}
 
 	for _, tc := range cases {

@@ -43,6 +43,18 @@ type DomainEvidence struct {
 	Disposable     bool   `json:"disposable"`
 	FreeProvider   bool   `json:"free_provider"`
 	Suggestion     string `json:"suggestion"`
+	// Health is populated only when domain-health checks are enabled and the
+	// domain resolved; nil otherwise.
+	Health *DomainHealthEvidence `json:"health,omitempty"`
+}
+
+// DomainHealthEvidence reports free domain-hygiene signals derived from DNS.
+// DKIM is intentionally omitted: it is selector-specific and cannot be verified
+// without a signed message. These signals do not affect classification.
+type DomainHealthEvidence struct {
+	SPF   bool `json:"spf"`   // a v=spf1 TXT record is published
+	DMARC bool `json:"dmarc"` // a v=DMARC1 policy is published at _dmarc.<domain>
+	MX    bool `json:"mx"`    // the domain has a usable mail host
 }
 
 // AccountEvidence is neutral structured account evidence.
@@ -59,8 +71,12 @@ type Assessment struct {
 	ReasonCode classify.ReasonCode
 	Retryable  bool
 	Confidence int
-	CheckedAt  time.Time
-	Source     string
+	// DeliverabilityScore (0-100) estimates how likely the address is to accept
+	// mail. It is distinct from Confidence, which is our certainty in the
+	// classification. Deterministic; derived from status + evidence, no network.
+	DeliverabilityScore int
+	CheckedAt           time.Time
+	Source              string
 
 	Syntax  emailverifier.Syntax
 	Domain  DomainEvidence
@@ -78,9 +94,11 @@ type Assessment struct {
 
 // Service converts engine evidence into an Assessment.
 type Service struct {
-	engine      Engine
-	clock       func() time.Time
-	smtpEnabled bool
+	engine       Engine
+	clock        func() time.Time
+	smtpEnabled  bool
+	domainHealth bool
+	lookupTXT    func(name string) ([]string, error)
 }
 
 // Option configures a Service.
@@ -100,13 +118,30 @@ func WithSMTPEnabled(enabled bool) Option {
 	return func(s *Service) { s.smtpEnabled = enabled }
 }
 
-// NewService builds a Service. By default SMTP checks are enabled and CheckedAt
-// uses the wall clock in UTC.
+// WithDomainHealth enables free SPF/DMARC/MX domain-health lookups, folded into
+// the domain evidence. Off by default (adds DNS TXT lookups per verification).
+func WithDomainHealth(enabled bool) Option {
+	return func(s *Service) { s.domainHealth = enabled }
+}
+
+// WithTXTLookup injects the DNS TXT resolver used for domain health, enabling
+// deterministic tests. Defaults to net.LookupTXT.
+func WithTXTLookup(fn func(name string) ([]string, error)) Option {
+	return func(s *Service) {
+		if fn != nil {
+			s.lookupTXT = fn
+		}
+	}
+}
+
+// NewService builds a Service. By default SMTP checks are enabled, CheckedAt
+// uses the wall clock in UTC, and domain-health checks are off.
 func NewService(engine Engine, opts ...Option) *Service {
 	s := &Service{
 		engine:      engine,
 		clock:       func() time.Time { return time.Now().UTC() },
 		smtpEnabled: true,
+		lookupTXT:   net.LookupTXT,
 	}
 	for _, o := range opts {
 		o(s)
@@ -169,7 +204,13 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 		smtpEv = s.runSMTP(syntax, &ev)
 	}
 
-	return s.finalize(email, syntax, ev, mx, smtpEv)
+	a := s.finalize(email, syntax, ev, mx, smtpEv)
+	// Domain health is optional, evidence-only, and never changes the status. It
+	// runs only when enabled and the domain actually resolved.
+	if s.domainHealth && ev.DNS == classify.DNSResolved {
+		a.Domain.Health = s.checkDomainHealth(syntax.Domain, ev)
+	}
+	return a
 }
 
 // runSMTP performs the recipient check and folds its evidence into ev, preserving
@@ -204,12 +245,13 @@ func (s *Service) finalize(email string, syntax emailverifier.Syntax, ev classif
 	c := classify.Classify(ev)
 
 	a := Assessment{
-		Email:           email,
-		Status:          c.Status,
-		ReasonCode:      c.ReasonCode,
-		Retryable:       c.Retryable,
-		Confidence:      c.Confidence,
-		CheckedAt:       s.clock(),
+		Email:               email,
+		Status:              c.Status,
+		ReasonCode:          c.ReasonCode,
+		Retryable:           c.Retryable,
+		Confidence:          c.Confidence,
+		DeliverabilityScore: deliverabilityScore(c.Status, c.Confidence, ev),
+		CheckedAt:           s.clock(),
 		Source:          string(ev.Source),
 		Syntax:          syntax,
 		Account:         AccountEvidence{RoleAccount: ev.RoleAccount},

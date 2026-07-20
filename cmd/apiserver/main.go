@@ -29,6 +29,7 @@ func main() {
 	svc := verification.NewService(
 		engine,
 		verification.WithSMTPEnabled(cfg.SMTPEnabled),
+		verification.WithDomainHealth(cfg.DomainHealth),
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
 

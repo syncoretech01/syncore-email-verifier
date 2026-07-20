@@ -305,13 +305,20 @@ type syntaxDTO struct {
 }
 
 type domainDTO struct {
-	HasMXRecords   bool   `json:"has_mx_records"`
-	NullMX         bool   `json:"null_mx"`
-	ImplicitMX     bool   `json:"implicit_mx"`
-	MailHostSource string `json:"mail_host_source"`
-	Disposable     bool   `json:"disposable"`
-	FreeProvider   bool   `json:"free_provider"`
-	Suggestion     string `json:"suggestion"`
+	HasMXRecords   bool             `json:"has_mx_records"`
+	NullMX         bool             `json:"null_mx"`
+	ImplicitMX     bool             `json:"implicit_mx"`
+	MailHostSource string           `json:"mail_host_source"`
+	Disposable     bool             `json:"disposable"`
+	FreeProvider   bool             `json:"free_provider"`
+	Suggestion     string           `json:"suggestion"`
+	DomainHealth   *domainHealthDTO `json:"domain_health,omitempty"`
+}
+
+type domainHealthDTO struct {
+	SPF   bool `json:"spf"`
+	DMARC bool `json:"dmarc"`
+	MX    bool `json:"mx"`
 }
 
 type accountDTO struct {
@@ -334,18 +341,19 @@ type smtpDTO struct {
 
 // verificationDTO is the structured POST response shape.
 type verificationDTO struct {
-	Email      string     `json:"email"`
-	Status     string     `json:"status"`
-	ReasonCode string     `json:"reason_code"`
-	Retryable  bool       `json:"retryable"`
-	Confidence int        `json:"confidence"`
-	CheckedAt  string     `json:"checked_at"`
-	Source     string     `json:"source"`
-	Syntax     syntaxDTO  `json:"syntax"`
-	Domain     domainDTO  `json:"domain"`
-	Account    accountDTO `json:"account"`
-	SMTP       smtpDTO    `json:"smtp"`
-	Error      *apiError  `json:"error"`
+	Email               string     `json:"email"`
+	Status              string     `json:"status"`
+	ReasonCode          string     `json:"reason_code"`
+	Retryable           bool       `json:"retryable"`
+	Confidence          int        `json:"confidence"`
+	DeliverabilityScore int        `json:"deliverability_score"`
+	CheckedAt           string     `json:"checked_at"`
+	Source              string     `json:"source"`
+	Syntax              syntaxDTO  `json:"syntax"`
+	Domain              domainDTO  `json:"domain"`
+	Account             accountDTO `json:"account"`
+	SMTP                smtpDTO    `json:"smtp"`
+	Error               *apiError  `json:"error"`
 }
 
 // legacyResponseDTO is the extended legacy GET response: all legacy + additive
@@ -353,26 +361,28 @@ type verificationDTO struct {
 // fields.
 type legacyResponseDTO struct {
 	*emailverifier.Result
-	Status          string    `json:"status"`
-	ReasonCode      string    `json:"reason_code"`
-	Retryable       bool      `json:"retryable"`
-	Confidence      int       `json:"confidence"`
-	CheckedAt       string    `json:"checked_at"`
-	SMTPAttempted   bool      `json:"smtp_attempted"`
-	SMTPCheckReason string    `json:"smtp_check_reason"`
-	Source          string    `json:"source"`
-	Error           *apiError `json:"error"`
+	Status              string    `json:"status"`
+	ReasonCode          string    `json:"reason_code"`
+	Retryable           bool      `json:"retryable"`
+	Confidence          int       `json:"confidence"`
+	DeliverabilityScore int       `json:"deliverability_score"`
+	CheckedAt           string    `json:"checked_at"`
+	SMTPAttempted       bool      `json:"smtp_attempted"`
+	SMTPCheckReason     string    `json:"smtp_check_reason"`
+	Source              string    `json:"source"`
+	Error               *apiError `json:"error"`
 }
 
 func toVerification(a verification.Assessment) verificationDTO {
 	return verificationDTO{
-		Email:      a.Email,
-		Status:     string(a.Status),
-		ReasonCode: string(a.ReasonCode),
-		Retryable:  a.Retryable,
-		Confidence: a.Confidence,
-		CheckedAt:  formatCheckedAt(a.CheckedAt),
-		Source:     a.Source,
+		Email:               a.Email,
+		Status:              string(a.Status),
+		ReasonCode:          string(a.ReasonCode),
+		Retryable:           a.Retryable,
+		Confidence:          a.Confidence,
+		DeliverabilityScore: a.DeliverabilityScore,
+		CheckedAt:           formatCheckedAt(a.CheckedAt),
+		Source:              a.Source,
 		Syntax: syntaxDTO{
 			Username: a.Syntax.Username,
 			Domain:   a.Syntax.Domain,
@@ -386,11 +396,21 @@ func toVerification(a verification.Assessment) verificationDTO {
 			Disposable:     a.Domain.Disposable,
 			FreeProvider:   a.Domain.FreeProvider,
 			Suggestion:     a.Domain.Suggestion,
+			DomainHealth:   toDomainHealthDTO(a.Domain.Health),
 		},
 		Account: accountDTO{RoleAccount: a.Account.RoleAccount},
 		SMTP:    toSMTPDTO(a),
 		Error:   toAPIError(a.Error),
 	}
+}
+
+// toDomainHealthDTO maps optional domain-health evidence; nil when the check was
+// not performed.
+func toDomainHealthDTO(h *verification.DomainHealthEvidence) *domainHealthDTO {
+	if h == nil {
+		return nil
+	}
+	return &domainHealthDTO{SPF: h.SPF, DMARC: h.DMARC, MX: h.MX}
 }
 
 // toSMTPDTO builds the smtp block, safely handling nil SMTP evidence (short
@@ -421,16 +441,17 @@ func toLegacyResponse(a verification.Assessment) legacyResponseDTO {
 		res = &emailverifier.Result{}
 	}
 	return legacyResponseDTO{
-		Result:          res,
-		Status:          string(a.Status),
-		ReasonCode:      string(a.ReasonCode),
-		Retryable:       a.Retryable,
-		Confidence:      a.Confidence,
-		CheckedAt:       formatCheckedAt(a.CheckedAt),
-		SMTPAttempted:   a.SMTPAttempted,
-		SMTPCheckReason: string(a.SMTPCheckReason),
-		Source:          a.Source,
-		Error:           toAPIError(a.Error),
+		Result:              res,
+		Status:              string(a.Status),
+		ReasonCode:          string(a.ReasonCode),
+		Retryable:           a.Retryable,
+		Confidence:          a.Confidence,
+		DeliverabilityScore: a.DeliverabilityScore,
+		CheckedAt:           formatCheckedAt(a.CheckedAt),
+		SMTPAttempted:       a.SMTPAttempted,
+		SMTPCheckReason:     string(a.SMTPCheckReason),
+		Source:              a.Source,
+		Error:               toAPIError(a.Error),
 	}
 }
 

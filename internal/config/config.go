@@ -32,6 +32,7 @@ const (
 	EnvBatchMaxItems        = "SYNCORE_VERIFIER_BATCH_MAX_ITEMS"
 	EnvBatchConcurrency     = "SYNCORE_VERIFIER_BATCH_CONCURRENCY"
 	EnvBatchMaxBodyBytes    = "SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES"
+	EnvDomainHealth         = "SYNCORE_VERIFIER_DOMAIN_HEALTH"
 )
 
 // Config is the validated runtime configuration.
@@ -64,6 +65,8 @@ type Config struct {
 	BatchConcurrency int64
 	// BatchMaxBodyBytes caps the batch request body (larger than a single POST).
 	BatchMaxBodyBytes int64
+	// DomainHealth enables free SPF/DMARC/MX domain-health lookups (off by default).
+	DomainHealth bool
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -123,6 +126,9 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if cfg.BatchMaxBodyBytes, err = parsePositiveInt(lookup, EnvBatchMaxBodyBytes, 65536); err != nil {
+		return nil, err
+	}
+	if cfg.DomainHealth, err = parseBool(lookup, EnvDomainHealth, false); err != nil {
 		return nil, err
 	}
 
