@@ -2,6 +2,29 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Growth OS foundation — auth, cache, batch, domain health
+
+Adds the net-new surface the CRM needs to call this service as Layer 1 of the verification waterfall. Additive and config-flagged: with no new variables set, behavior is unchanged.
+
+**Authentication & safe bind**
+- Optional `SYNCORE_VERIFIER_AUTH_TOKEN`. When set, all verification endpoints require `Authorization: Bearer <token>` (constant-time compare); `/health` stays open; missing/invalid → **401**.
+- Startup **fails fast** if bound to a non-loopback address with no token set, so the service is never exposed unauthenticated.
+
+**Result cache (persistence seam)**
+- New `internal/store` package: a generic, concurrency-safe TTL `Store[V]` with a bounded in-memory backend (a durable backend can implement the same interface later).
+- Optional result cache (`SYNCORE_VERIFIER_CACHE_TTL`, off by default): caches terminal results for the full TTL and retryable `unknown` results for a shorter TTL, sparing repeat DNS/SMTP work. Classification is never altered.
+
+**Batch endpoint**
+- New **`POST /v1/verifications:batch`** — stateless, bounded (`SYNCORE_VERIFIER_BATCH_MAX_ITEMS`), ordered results, per-item fault isolation (a bad item never fails the batch), processed through a bounded worker pool (`SYNCORE_VERIFIER_BATCH_CONCURRENCY`).
+- Server `WriteTimeout` is now batch-aware and covers the documented worst-case batch duration; the bound is stated in `deploy/`.
+
+**Deliverability score & domain health**
+- Additive **`deliverability_score`** (0–100): a deterministic, network-free estimate of how likely an address is to accept mail, distinct from `confidence`.
+- Optional **`domain_health`** (`SYNCORE_VERIFIER_DOMAIN_HEALTH`, off by default): free SPF/DMARC/MX DNS signals folded into the domain evidence; the classifier stays pure.
+
+**Deployment**
+- New `deploy/` unit files (systemd + PM2), a vault-populated env template, and a deployment guide documenting the co-located-vs-port-25 tradeoff, the port-25 reality, and the batch timing bound.
+
 ## Phase 1 — local verification service
 
 Turns the upstream reference API into a clean, local, single-instance verification service with a structured classification model. No database, queue, retry worker, bulk upload, authentication, paid provider, frontend, or CRM integration.
