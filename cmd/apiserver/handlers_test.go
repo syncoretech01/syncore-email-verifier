@@ -44,7 +44,16 @@ func newTestServer(t *testing.T, svc VerificationService, maxBody int64) http.Ha
 	if maxBody == 0 {
 		maxBody = 4096
 	}
-	return newRouter(newHandlers(svc, maxBody))
+	return newRouter(newHandlers(svc, maxBody), "")
+}
+
+// newTestServerWithAuth builds the real router with bearer auth enabled.
+func newTestServerWithAuth(t *testing.T, svc VerificationService, maxBody int64, token string) http.Handler {
+	t.Helper()
+	if maxBody == 0 {
+		maxBody = 4096
+	}
+	return newRouter(newHandlers(svc, maxBody), token)
 }
 
 func do(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {

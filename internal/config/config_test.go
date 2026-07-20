@@ -29,6 +29,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.False(t, cfg.DisposableAutoUpdate)
 	assert.True(t, cfg.DomainSuggest)
 	assert.Equal(t, int64(4096), cfg.MaxBodyBytes)
+	assert.Equal(t, "", cfg.AuthToken)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -42,6 +43,8 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvDisposableAutoUpdate: "true",
 		EnvDomainSuggest:        "false",
 		EnvMaxBodyBytes:         "8192",
+		// A non-loopback bind requires a token (see validateBindSecurity).
+		EnvAuthToken: "override-token",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -54,6 +57,7 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.True(t, cfg.DisposableAutoUpdate)
 	assert.False(t, cfg.DomainSuggest)
 	assert.Equal(t, int64(8192), cfg.MaxBodyBytes)
+	assert.Equal(t, "override-token", cfg.AuthToken)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -77,6 +81,9 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"smtp enabled empty hello name", map[string]string{EnvSMTPEnabled: "true", EnvHelloName: ""}, EnvHelloName},
 		{"smtp enabled whitespace hello name", map[string]string{EnvSMTPEnabled: "true", EnvHelloName: "bad host"}, EnvHelloName},
 		{"smtp enabled control hello name", map[string]string{EnvSMTPEnabled: "true", EnvHelloName: "bad\x01host"}, EnvHelloName},
+		{"non-loopback bind without token", map[string]string{EnvBindAddr: "0.0.0.0:9000"}, EnvAuthToken},
+		{"all-interfaces bind without token", map[string]string{EnvBindAddr: ":9000"}, EnvAuthToken},
+		{"lan bind without token", map[string]string{EnvBindAddr: "192.168.1.10:9000"}, EnvAuthToken},
 	}
 
 	for _, tc := range cases {
@@ -106,6 +113,27 @@ func TestLoad_SMTPDisabledEmptyHelloNameOK(t *testing.T) {
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
 	assert.False(t, cfg.SMTPEnabled)
+}
+
+func TestLoad_NonLoopbackBindWithTokenOK(t *testing.T) {
+	// A non-loopback bind is allowed once an auth token is set.
+	for _, addr := range []string{"0.0.0.0:9000", ":9000", "192.168.1.10:9000"} {
+		cfg, err := loadFrom(lookupFrom(map[string]string{
+			EnvBindAddr:  addr,
+			EnvAuthToken: "a-token",
+		}))
+		require.NoErrorf(t, err, "addr %q with token should load", addr)
+		assert.Equal(t, addr, cfg.BindAddr)
+	}
+}
+
+func TestLoad_LoopbackBindNeedsNoToken(t *testing.T) {
+	// Loopback binds are safe without a token.
+	for _, addr := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		cfg, err := loadFrom(lookupFrom(map[string]string{EnvBindAddr: addr}))
+		require.NoErrorf(t, err, "loopback addr %q should load tokenless", addr)
+		assert.Equal(t, "", cfg.AuthToken)
+	}
 }
 
 // TestLoad_NoLeakageBetweenTests confirms the map-based lookup is fully isolated:

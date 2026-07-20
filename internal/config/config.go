@@ -25,6 +25,7 @@ const (
 	EnvDisposableAutoUpdate = "SYNCORE_VERIFIER_DISPOSABLE_AUTOUPDATE"
 	EnvDomainSuggest        = "SYNCORE_VERIFIER_DOMAIN_SUGGEST"
 	EnvMaxBodyBytes         = "SYNCORE_VERIFIER_MAX_BODY_BYTES"
+	EnvAuthToken            = "SYNCORE_VERIFIER_AUTH_TOKEN"
 )
 
 // Config is the validated runtime configuration.
@@ -38,6 +39,10 @@ type Config struct {
 	DisposableAutoUpdate bool
 	DomainSuggest        bool
 	MaxBodyBytes         int64
+	// AuthToken, when non-empty, requires callers to present
+	// "Authorization: Bearer <token>" on every verification endpoint. Empty
+	// disables auth (only safe on a loopback bind — see validateBindSecurity).
+	AuthToken string
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -52,9 +57,13 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		BindAddr:  get(lookup, EnvBindAddr, "127.0.0.1:8080"),
 		FromEmail: get(lookup, EnvFromEmail, "hello@syncoretech.com"),
 		HelloName: get(lookup, EnvHelloName, "syncoretech.com"),
+		AuthToken: get(lookup, EnvAuthToken, ""),
 	}
 
 	if err := validateBindAddr(cfg.BindAddr); err != nil {
+		return nil, err
+	}
+	if err := validateBindSecurity(cfg.BindAddr, cfg.AuthToken); err != nil {
 		return nil, err
 	}
 
@@ -157,6 +166,37 @@ func validateBindAddr(addr string) error {
 		return fmt.Errorf("%s: port must be within 0-65535", EnvBindAddr)
 	}
 	return nil
+}
+
+// validateBindSecurity refuses to expose the service on a non-loopback address
+// without an auth token set. Binding a public or LAN interface with no bearer
+// token would let anyone who can reach the host drive SMTP probes through it.
+func validateBindSecurity(addr, token string) error {
+	if token != "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Already validated by validateBindAddr; nothing more to check here.
+		return nil
+	}
+	if isLoopbackHost(host) {
+		return nil
+	}
+	return fmt.Errorf("%s: must be set when %s binds a non-loopback address (%q)", EnvAuthToken, EnvBindAddr, addr)
+}
+
+// isLoopbackHost reports whether the bind host is confined to the local machine.
+// An empty host (bind all interfaces) or any non-"localhost" hostname is treated
+// as non-loopback.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func hasWhitespaceOrControl(s string) bool {

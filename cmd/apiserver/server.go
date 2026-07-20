@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/subtle"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -11,9 +13,10 @@ import (
 )
 
 // newRouter wires the routes and cross-cutting handlers, returning the fully
-// wrapped handler (panic recovery on the outside so it covers every route,
-// including NotFound and MethodNotAllowed).
-func newRouter(h *Handlers) http.Handler {
+// wrapped handler. Middleware order is outside-in: panic recovery wraps auth
+// wraps the router, so recovery covers every route (including NotFound and
+// MethodNotAllowed) and auth runs before routing.
+func newRouter(h *Handlers, authToken string) http.Handler {
 	router := httprouter.New()
 
 	router.GET("/v1/:email/verification", h.handleGetVerification)
@@ -29,7 +32,45 @@ func newRouter(h *Handlers) http.Handler {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	})
 
-	return recoverMiddleware(router)
+	return recoverMiddleware(authMiddleware(authToken, router))
+}
+
+// healthPath is the one route that stays open when auth is enabled, so probes
+// and load balancers can check liveness without a credential.
+const healthPath = "/health"
+
+// authMiddleware enforces a bearer token on every route except /health. When the
+// token is empty, auth is disabled and the middleware is a pass-through (only
+// reached on a loopback bind — see config.validateBindSecurity). The token
+// comparison is constant-time to avoid leaking it via timing.
+func authMiddleware(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	expected := []byte(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == healthPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+		provided, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok || subtle.ConstantTimeCompare([]byte(provided), expected) != 1 {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// bearerToken extracts the credential from an "Authorization: Bearer <token>"
+// header. The scheme is matched case-insensitively per RFC 7235; the token is
+// returned verbatim.
+func bearerToken(header string) (string, bool) {
+	const scheme = "bearer "
+	if len(header) < len(scheme) || !strings.EqualFold(header[:len(scheme)], scheme) {
+		return "", false
+	}
+	return header[len(scheme):], true
 }
 
 // recoverMiddleware converts an unexpected panic into an HTTP 500 JSON response
@@ -52,7 +93,7 @@ func recoverMiddleware(next http.Handler) http.Handler {
 func newServer(cfg *config.Config, h *Handlers) *http.Server {
 	return &http.Server{
 		Addr:              cfg.BindAddr,
-		Handler:           newRouter(h),
+		Handler:           newRouter(h, cfg.AuthToken),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      writeTimeoutFor(cfg),
