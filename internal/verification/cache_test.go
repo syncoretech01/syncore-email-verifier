@@ -29,7 +29,7 @@ func (c *countingVerifier) count() int { return int(atomic.LoadInt32(&c.calls)) 
 
 type testClock struct{ t time.Time }
 
-func (c *testClock) now() time.Time      { return c.t }
+func (c *testClock) now() time.Time          { return c.t }
 func (c *testClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func newTestClock() *testClock {
@@ -79,7 +79,7 @@ func TestCache_UnknownUsesShortTTLAndExpires(t *testing.T) {
 	cv.Verify(context.Background(), "user@example.com") // hit
 	assert.Equal(t, 1, next.count())
 
-	clk.advance(time.Minute) // unknown TTL elapsed
+	clk.advance(time.Minute)                            // unknown TTL elapsed
 	cv.Verify(context.Background(), "user@example.com") // miss again -> recompute
 	assert.Equal(t, 2, next.count(), "retryable result must be re-verified after the short TTL")
 }

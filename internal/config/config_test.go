@@ -51,7 +51,7 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvDomainSuggest:        "false",
 		EnvMaxBodyBytes:         "8192",
 		// A non-loopback bind requires a token (see validateBindSecurity).
-		EnvAuthToken:       "override-token",
+		EnvAuthToken:         "override-token",
 		EnvCacheTTL:          "10m",
 		EnvCacheTTLUnknown:   "30s",
 		EnvCacheMaxEntries:   "500",
