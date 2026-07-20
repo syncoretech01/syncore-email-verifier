@@ -33,6 +33,9 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, time.Duration(0), cfg.CacheTTL)
 	assert.Equal(t, time.Duration(0), cfg.CacheTTLUnknown)
 	assert.Equal(t, int64(10000), cfg.CacheMaxEntries)
+	assert.Equal(t, int64(100), cfg.BatchMaxItems)
+	assert.Equal(t, int64(10), cfg.BatchConcurrency)
+	assert.Equal(t, int64(65536), cfg.BatchMaxBodyBytes)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -48,9 +51,12 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvMaxBodyBytes:         "8192",
 		// A non-loopback bind requires a token (see validateBindSecurity).
 		EnvAuthToken:       "override-token",
-		EnvCacheTTL:        "10m",
-		EnvCacheTTLUnknown: "30s",
-		EnvCacheMaxEntries: "500",
+		EnvCacheTTL:          "10m",
+		EnvCacheTTLUnknown:   "30s",
+		EnvCacheMaxEntries:   "500",
+		EnvBatchMaxItems:     "50",
+		EnvBatchConcurrency:  "5",
+		EnvBatchMaxBodyBytes: "131072",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -67,6 +73,9 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.Equal(t, 10*time.Minute, cfg.CacheTTL)
 	assert.Equal(t, 30*time.Second, cfg.CacheTTLUnknown)
 	assert.Equal(t, int64(500), cfg.CacheMaxEntries)
+	assert.Equal(t, int64(50), cfg.BatchMaxItems)
+	assert.Equal(t, int64(5), cfg.BatchConcurrency)
+	assert.Equal(t, int64(131072), cfg.BatchMaxBodyBytes)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -97,6 +106,9 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"invalid cache ttl", map[string]string{EnvCacheTTL: "tenminutes"}, EnvCacheTTL},
 		{"invalid unknown cache ttl", map[string]string{EnvCacheTTLUnknown: "nope"}, EnvCacheTTLUnknown},
 		{"zero cache max entries", map[string]string{EnvCacheMaxEntries: "0"}, EnvCacheMaxEntries},
+		{"zero batch max items", map[string]string{EnvBatchMaxItems: "0"}, EnvBatchMaxItems},
+		{"negative batch concurrency", map[string]string{EnvBatchConcurrency: "-1"}, EnvBatchConcurrency},
+		{"non-integer batch body", map[string]string{EnvBatchMaxBodyBytes: "big"}, EnvBatchMaxBodyBytes},
 	}
 
 	for _, tc := range cases {

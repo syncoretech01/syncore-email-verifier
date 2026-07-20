@@ -42,7 +42,11 @@ func main() {
 		log.Printf("result cache enabled (ttl=%s, unknown_ttl=%s, max_entries=%d)", cfg.CacheTTL, cfg.CacheTTLUnknown, cfg.CacheMaxEntries)
 	}
 
-	handlers := newHandlers(vs, cfg.MaxBodyBytes)
+	handlers := newHandlers(vs, cfg.MaxBodyBytes, batchConfig{
+		maxItems:     int(cfg.BatchMaxItems),
+		concurrency:  int(cfg.BatchConcurrency),
+		maxBodyBytes: cfg.BatchMaxBodyBytes,
+	})
 	server := newServer(cfg, handlers)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

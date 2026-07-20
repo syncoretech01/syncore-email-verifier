@@ -21,6 +21,7 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 
 	router.GET("/v1/:email/verification", h.handleGetVerification)
 	router.POST("/v1/verifications", h.handleVerifications)
+	router.POST("/v1/verifications:batch", h.handleVerificationsBatch)
 	router.GET("/health", h.handleHealth)
 
 	router.NotFound = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -104,16 +105,37 @@ func newServer(cfg *config.Config, h *Handlers) *http.Server {
 
 // writeTimeoutFor derives a WriteTimeout that will not truncate a legitimate
 // verification. A single slow MX can take up to ConnectTimeout + OperationTimeout
-// (they are configurable), so the write deadline is that sum plus 15s of
-// headroom, and never less than 35s.
+// (they are configurable). The batch endpoint runs at most
+// ceil(BatchMaxItems / BatchConcurrency) sequential rounds of that worst case, so
+// the write deadline must cover the larger of the two, plus 15s of headroom, and
+// never less than 35s. The resulting batch bound is documented in deploy/ so the
+// CRM can chunk its requests to fit.
 func writeTimeoutFor(cfg *config.Config) time.Duration {
 	const (
 		headroom = 15 * time.Second
 		floor    = 35 * time.Second
 	)
-	wt := cfg.ConnectTimeout + cfg.OperationTimeout + headroom
+	perItem := cfg.ConnectTimeout + cfg.OperationTimeout
+
+	wt := perItem + headroom
+	if batch := batchWorstCase(cfg) + headroom; batch > wt {
+		wt = batch
+	}
 	if wt < floor {
 		wt = floor
 	}
 	return wt
+}
+
+// batchWorstCase is the worst-case wall-clock for a full-capacity batch:
+// ceil(BatchMaxItems / BatchConcurrency) rounds, each up to
+// ConnectTimeout + OperationTimeout (concurrent MX within an item do not sum).
+func batchWorstCase(cfg *config.Config) time.Duration {
+	items := cfg.BatchMaxItems
+	concurrency := cfg.BatchConcurrency
+	if items <= 0 || concurrency <= 0 {
+		return 0
+	}
+	rounds := (items + concurrency - 1) / concurrency // ceil division
+	return time.Duration(rounds) * (cfg.ConnectTimeout + cfg.OperationTimeout)
 }

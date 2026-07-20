@@ -29,6 +29,9 @@ const (
 	EnvCacheTTL             = "SYNCORE_VERIFIER_CACHE_TTL"
 	EnvCacheTTLUnknown      = "SYNCORE_VERIFIER_CACHE_TTL_UNKNOWN"
 	EnvCacheMaxEntries      = "SYNCORE_VERIFIER_CACHE_MAX_ENTRIES"
+	EnvBatchMaxItems        = "SYNCORE_VERIFIER_BATCH_MAX_ITEMS"
+	EnvBatchConcurrency     = "SYNCORE_VERIFIER_BATCH_CONCURRENCY"
+	EnvBatchMaxBodyBytes    = "SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES"
 )
 
 // Config is the validated runtime configuration.
@@ -54,6 +57,13 @@ type Config struct {
 	CacheTTLUnknown time.Duration
 	// CacheMaxEntries bounds the in-memory result cache.
 	CacheMaxEntries int64
+	// BatchMaxItems caps the number of emails a single batch request may carry.
+	BatchMaxItems int64
+	// BatchConcurrency bounds the worker pool that processes a batch, so batches
+	// never stampede mail providers.
+	BatchConcurrency int64
+	// BatchMaxBodyBytes caps the batch request body (larger than a single POST).
+	BatchMaxBodyBytes int64
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -104,6 +114,15 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if cfg.CacheMaxEntries, err = parsePositiveInt(lookup, EnvCacheMaxEntries, 10000); err != nil {
+		return nil, err
+	}
+	if cfg.BatchMaxItems, err = parsePositiveInt(lookup, EnvBatchMaxItems, 100); err != nil {
+		return nil, err
+	}
+	if cfg.BatchConcurrency, err = parsePositiveInt(lookup, EnvBatchConcurrency, 10); err != nil {
+		return nil, err
+	}
+	if cfg.BatchMaxBodyBytes, err = parsePositiveInt(lookup, EnvBatchMaxBodyBytes, 65536); err != nil {
 		return nil, err
 	}
 

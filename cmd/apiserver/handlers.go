@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -25,14 +27,31 @@ type VerificationService interface {
 	Verify(ctx context.Context, email string) verification.Assessment
 }
 
+// batchConfig bounds the batch endpoint.
+type batchConfig struct {
+	maxItems     int
+	concurrency  int
+	maxBodyBytes int64
+}
+
 // Handlers holds the dependencies for the HTTP handlers.
 type Handlers struct {
 	svc          VerificationService
 	maxBodyBytes int64
+	batch        batchConfig
 }
 
-func newHandlers(svc VerificationService, maxBodyBytes int64) *Handlers {
-	return &Handlers{svc: svc, maxBodyBytes: maxBodyBytes}
+func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig) *Handlers {
+	if batch.maxItems <= 0 {
+		batch.maxItems = 100
+	}
+	if batch.concurrency <= 0 {
+		batch.concurrency = 10
+	}
+	if batch.maxBodyBytes <= 0 {
+		batch.maxBodyBytes = 65536
+	}
+	return &Handlers{svc: svc, maxBodyBytes: maxBodyBytes, batch: batch}
 }
 
 // handleHealth is a liveness endpoint. It performs no DNS/SMTP/provider checks.
@@ -96,6 +115,126 @@ func (h *Handlers) handleVerifications(w http.ResponseWriter, r *http.Request, _
 
 	a := h.svc.Verify(r.Context(), trimmed)
 	writeJSON(w, http.StatusOK, toVerification(a))
+}
+
+// batchRequest is the structured batch input. meta is opaque and echoed back.
+type batchRequest struct {
+	Emails []string        `json:"emails"`
+	Meta   json.RawMessage `json:"meta,omitempty"`
+}
+
+// batchResponse carries one result per input email, in order, plus the echoed
+// meta.
+type batchResponse struct {
+	Results []verificationDTO `json:"results"`
+	Meta    json.RawMessage   `json:"meta,omitempty"`
+}
+
+// handleVerificationsBatch verifies a bounded list of emails through a bounded
+// worker pool. It is stateless: no persistence, no queue. A single bad or faulty
+// item never fails the whole batch — results are returned one-per-input, in order.
+func (h *Handlers) handleVerificationsBatch(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	if !isJSONMediaType(r.Header.Get("Content-Type")) {
+		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, h.batch.maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	var req batchRequest
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body is too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body must be a single valid JSON object")
+		return
+	}
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body must contain exactly one JSON object")
+		return
+	}
+	if req.Emails == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "emails field is required")
+		return
+	}
+	if len(req.Emails) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "emails must not be empty")
+		return
+	}
+	if len(req.Emails) > h.batch.maxItems {
+		writeError(w, http.StatusBadRequest, "invalid_request", "emails must not exceed the batch limit")
+		return
+	}
+
+	results := h.verifyBatch(r.Context(), req.Emails)
+	writeJSON(w, http.StatusOK, batchResponse{Results: results, Meta: req.Meta})
+}
+
+// verifyBatch runs the emails through a bounded worker pool, returning one result
+// per input in the original order. Each item is isolated: a per-item panic is
+// recovered into an unknown/retryable result so it never fails the batch.
+func (h *Handlers) verifyBatch(ctx context.Context, emails []string) []verificationDTO {
+	results := make([]verificationDTO, len(emails))
+
+	workers := h.batch.concurrency
+	if workers > len(emails) {
+		workers = len(emails)
+	}
+
+	type job struct {
+		i     int
+		email string
+	}
+	jobs := make(chan job)
+
+	var wg sync.WaitGroup
+	for n := 0; n < workers; n++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				// Distinct indices → no shared-slice-element races.
+				results[j.i] = h.verifyItem(ctx, j.email)
+			}
+		}()
+	}
+	for i, email := range emails {
+		jobs <- job{i: i, email: email}
+	}
+	close(jobs)
+	wg.Wait()
+
+	return results
+}
+
+// verifyItem verifies one address. A panic is recovered into an unknown,
+// retryable result (a per-item fault must never fail the batch). Invalid or
+// unverifiable inputs flow through the service and classifier normally (e.g.
+// syntax_invalid), so no classification semantics are duplicated here.
+func (h *Handlers) verifyItem(ctx context.Context, rawEmail string) (dto verificationDTO) {
+	email := strings.TrimSpace(rawEmail)
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("recovered panic while verifying a batch item")
+			dto = faultItemDTO(email)
+		}
+	}()
+	return toVerification(h.svc.Verify(ctx, email))
+}
+
+// faultItemDTO represents an item whose verification could not be completed due
+// to an unexpected internal fault: unknown + retryable, never invalid.
+func faultItemDTO(email string) verificationDTO {
+	return verificationDTO{
+		Email:     email,
+		Status:    "unknown",
+		Retryable: true,
+		Error:     &apiError{Code: "internal", Message: "verification could not be completed"},
+	}
 }
 
 // validateEmailInput trims surrounding whitespace and enforces the request-level

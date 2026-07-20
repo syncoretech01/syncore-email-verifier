@@ -39,12 +39,15 @@ func (s *stubService) Verify(_ context.Context, email string) verification.Asses
 	return a
 }
 
+// defaultTestBatch is the batch config used by the general-purpose test helpers.
+var defaultTestBatch = batchConfig{maxItems: 100, concurrency: 10, maxBodyBytes: 65536}
+
 func newTestServer(t *testing.T, svc VerificationService, maxBody int64) http.Handler {
 	t.Helper()
 	if maxBody == 0 {
 		maxBody = 4096
 	}
-	return newRouter(newHandlers(svc, maxBody), "")
+	return newRouter(newHandlers(svc, maxBody, defaultTestBatch), "")
 }
 
 // newTestServerWithAuth builds the real router with bearer auth enabled.
@@ -53,7 +56,13 @@ func newTestServerWithAuth(t *testing.T, svc VerificationService, maxBody int64,
 	if maxBody == 0 {
 		maxBody = 4096
 	}
-	return newRouter(newHandlers(svc, maxBody), token)
+	return newRouter(newHandlers(svc, maxBody, defaultTestBatch), token)
+}
+
+// newTestBatchServer builds the router with a custom batch config for batch tests.
+func newTestBatchServer(t *testing.T, svc VerificationService, batch batchConfig) http.Handler {
+	t.Helper()
+	return newRouter(newHandlers(svc, 4096, batch), "")
 }
 
 func do(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {
