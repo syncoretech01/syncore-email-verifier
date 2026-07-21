@@ -68,6 +68,45 @@ func TestDomainHealth_LookupErrorTreatedAsAbsent(t *testing.T) {
 
 var errBoom = &net.DNSError{Err: "server misbehaving", IsTemporary: true}
 
+func TestComputeScoreComponents(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   classify.Evidence
+		want ScoreComponents
+	}{
+		{
+			"accepted good domain",
+			classify.Evidence{SyntaxValid: true, DNS: classify.DNSResolved, MailHostSource: classify.MailHostMX, RecipientResult: classify.RecipientAccepted},
+			ScoreComponents{Syntax: 100, Domain: 100, Mailbox: 100},
+		},
+		{
+			"invalid syntax",
+			classify.Evidence{SyntaxValid: false},
+			ScoreComponents{Syntax: 0, Domain: 0, Mailbox: 40},
+		},
+		{
+			"null mx rejects mail",
+			classify.Evidence{SyntaxValid: true, DNS: classify.DNSResolved, NullMX: true},
+			ScoreComponents{Syntax: 100, Domain: 0, Mailbox: 40},
+		},
+		{
+			"disposable domain, rejected mailbox",
+			classify.Evidence{SyntaxValid: true, DNS: classify.DNSResolved, MailHostSource: classify.MailHostMX, Disposable: true, RecipientResult: classify.RecipientRejected},
+			ScoreComponents{Syntax: 100, Domain: 30, Mailbox: 0},
+		},
+		{
+			"catch-all confirmed",
+			classify.Evidence{SyntaxValid: true, DNS: classify.DNSResolved, MailHostSource: classify.MailHostMX, CatchAllResult: classify.CatchAllConfirmed},
+			ScoreComponents{Syntax: 100, Domain: 100, Mailbox: 50},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, computeScoreComponents(tc.ev))
+		})
+	}
+}
+
 func TestDeliverabilityScore(t *testing.T) {
 	cases := []struct {
 		name       string

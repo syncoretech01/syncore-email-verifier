@@ -427,6 +427,12 @@ type domainHealthDTO struct {
 	MX    bool `json:"mx"`
 }
 
+type scoreComponentsDTO struct {
+	Syntax  int `json:"syntax"`
+	Domain  int `json:"domain"`
+	Mailbox int `json:"mailbox"`
+}
+
 type accountDTO struct {
 	RoleAccount bool `json:"role_account"`
 }
@@ -447,20 +453,21 @@ type smtpDTO struct {
 
 // verificationDTO is the structured POST response shape.
 type verificationDTO struct {
-	Email               string     `json:"email"`
-	Status              string     `json:"status"`
-	ReasonCode          string     `json:"reason_code"`
-	Retryable           bool       `json:"retryable"`
-	Confidence          int        `json:"confidence"`
-	DeliverabilityScore int        `json:"deliverability_score"`
-	Suppressed          bool       `json:"suppressed"`
-	CheckedAt           string     `json:"checked_at"`
-	Source              string     `json:"source"`
-	Syntax              syntaxDTO  `json:"syntax"`
-	Domain              domainDTO  `json:"domain"`
-	Account             accountDTO `json:"account"`
-	SMTP                smtpDTO    `json:"smtp"`
-	Error               *apiError  `json:"error"`
+	Email               string             `json:"email"`
+	Status              string             `json:"status"`
+	ReasonCode          string             `json:"reason_code"`
+	Retryable           bool               `json:"retryable"`
+	Confidence          int                `json:"confidence"`
+	DeliverabilityScore int                `json:"deliverability_score"`
+	ScoreComponents     scoreComponentsDTO `json:"score_components"`
+	Suppressed          bool               `json:"suppressed"`
+	CheckedAt           string             `json:"checked_at"`
+	Source              string             `json:"source"`
+	Syntax              syntaxDTO          `json:"syntax"`
+	Domain              domainDTO          `json:"domain"`
+	Account             accountDTO         `json:"account"`
+	SMTP                smtpDTO            `json:"smtp"`
+	Error               *apiError          `json:"error"`
 }
 
 // legacyResponseDTO is the extended legacy GET response: all legacy + additive
@@ -488,9 +495,14 @@ func toVerification(a verification.Assessment) verificationDTO {
 		Retryable:           a.Retryable,
 		Confidence:          a.Confidence,
 		DeliverabilityScore: a.DeliverabilityScore,
-		Suppressed:          a.Suppressed,
-		CheckedAt:           formatCheckedAt(a.CheckedAt),
-		Source:              a.Source,
+		ScoreComponents: scoreComponentsDTO{
+			Syntax:  a.ScoreComponents.Syntax,
+			Domain:  a.ScoreComponents.Domain,
+			Mailbox: a.ScoreComponents.Mailbox,
+		},
+		Suppressed: a.Suppressed,
+		CheckedAt:  formatCheckedAt(a.CheckedAt),
+		Source:     a.Source,
 		Syntax: syntaxDTO{
 			Username: a.Syntax.Username,
 			Domain:   a.Syntax.Domain,

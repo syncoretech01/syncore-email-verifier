@@ -75,8 +75,10 @@ type Assessment struct {
 	// mail. It is distinct from Confidence, which is our certainty in the
 	// classification. Deterministic; derived from status + evidence, no network.
 	DeliverabilityScore int
-	CheckedAt           time.Time
-	Source              string
+	// ScoreComponents decomposes DeliverabilityScore into sub-signals.
+	ScoreComponents ScoreComponents
+	CheckedAt       time.Time
+	Source          string
 
 	Syntax  emailverifier.Syntax
 	Domain  DomainEvidence
@@ -287,6 +289,7 @@ func (s *Service) finalize(email string, syntax emailverifier.Syntax, ev classif
 		Retryable:           c.Retryable,
 		Confidence:          c.Confidence,
 		DeliverabilityScore: deliverabilityScore(c.Status, c.Confidence, ev),
+		ScoreComponents:     computeScoreComponents(ev),
 		CheckedAt:           s.clock(),
 		Source:              string(ev.Source),
 		Syntax:              syntax,

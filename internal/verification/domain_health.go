@@ -77,6 +77,49 @@ func deliverabilityScore(status classify.Status, confidence int, ev classify.Evi
 	return clampScore(score)
 }
 
+// ScoreComponents decomposes the deliverability score into its deterministic
+// sub-signals (0-100 each), so callers can see why an address scored as it did.
+type ScoreComponents struct {
+	Syntax  int `json:"syntax"`  // is the address well-formed
+	Domain  int `json:"domain"`  // does the domain accept mail (MX/null-mx/disposable)
+	Mailbox int `json:"mailbox"` // did the mailbox accept (SMTP recipient result)
+}
+
+// computeScoreComponents derives the sub-scores from evidence. Network-free.
+func computeScoreComponents(ev classify.Evidence) ScoreComponents {
+	c := ScoreComponents{}
+
+	if ev.SyntaxValid {
+		c.Syntax = 100
+	}
+
+	switch {
+	case !ev.SyntaxValid:
+		c.Domain = 0
+	case ev.DNS != classify.DNSResolved:
+		c.Domain = 30 // couldn't confirm the domain
+	case ev.NullMX || ev.MailHostSource == classify.MailHostNone:
+		c.Domain = 0 // domain refuses mail
+	case ev.Disposable:
+		c.Domain = 30
+	default:
+		c.Domain = 100
+	}
+
+	switch {
+	case ev.RecipientResult == classify.RecipientAccepted:
+		c.Mailbox = 100
+	case ev.RecipientResult == classify.RecipientRejected:
+		c.Mailbox = 0
+	case ev.CatchAllResult == classify.CatchAllConfirmed:
+		c.Mailbox = 50
+	default:
+		c.Mailbox = 40 // not checked / temporary / blocked / unknown
+	}
+
+	return c
+}
+
 func clampScore(n int) int {
 	if n < 0 {
 		return 0
