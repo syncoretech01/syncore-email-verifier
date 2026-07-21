@@ -19,8 +19,20 @@ Builds the enterprise capabilities from the roadmap that require no external inf
 - **Structured JSON access logs** (`log/slog`) with a per-request `X-Request-ID`; route labels are normalized so the email in the legacy GET path is never logged.
 - `GET /ready` readiness (pings Postgres when configured); `/health` and `/ready` stay open under auth.
 
-**Rate limiting (Phase 8, part 1)**
+**Rate limiting + API keys (Phase 8)**
 - New `internal/ratelimit` token-bucket limiter. `SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` enforces a per-client (bearer token or IP) limit; over-limit → `429`.
+- **API keys** (`SYNCORE_VERIFIER_API_KEYS`): multiple `name:key` credentials, hashed at load; any valid key authenticates like the bearer token and satisfies the safe-bind guard. (Quotas/credits deferred — they want durable atomic counters.)
+
+**Compliance (Phase 10)**
+- **Suppression list** (`SYNCORE_VERIFIER_SUPPRESS_EMAILS`): a do-not-verify address short-circuits before any network check and returns `suppressed:true`.
+- **Right-to-erasure**: `POST /admin/erasure` removes an address's cached data (Store gained `Delete`, memory + Postgres).
+- **Audit log**: verifications and erasures emit structured events carrying only a SHA-256 of the email — never plaintext PII.
+
+**Feedback loop (Phase 7)**
+- New `internal/feedback`: per-domain reputation priors (delivered/bounced/complained/engaged + bounce rate) from real sending outcomes, with a deterministic synthetic replay test. `POST /v1/feedback` ingests HMAC-signed events (`SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY`).
+
+**Deliverability score components (Phase 6)**
+- Additive `score_components` (`syntax`/`domain`/`mailbox`, 0–100) decomposing `deliverability_score`. Deterministic, network-free.
 
 ## Growth OS foundation — auth, cache, batch, domain health
 
