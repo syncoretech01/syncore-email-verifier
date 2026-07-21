@@ -15,6 +15,7 @@ import (
 	"github.com/AfterShip/email-verifier/internal/config"
 	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/metrics"
+	"github.com/AfterShip/email-verifier/internal/ratelimit"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
@@ -39,6 +40,12 @@ func main() {
 	// Structured logs + a dependency-free metrics registry.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	registry := metrics.New()
+
+	// Optional per-client rate limiter.
+	var limiter *ratelimit.Limiter
+	if cfg.RateLimitPerMinute > 0 {
+		limiter = ratelimit.New(int(cfg.RateLimitPerMinute))
+	}
 
 	// Store backend (in-memory or Postgres) shared by the result cache and the
 	// idempotency store.
@@ -86,6 +93,7 @@ func main() {
 		metrics:            registry,
 		logger:             logger,
 		ready:              readyFn,
+		rateLimiter:        limiter,
 	})
 	server := newServer(cfg, handlers)
 

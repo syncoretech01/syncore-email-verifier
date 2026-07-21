@@ -40,6 +40,7 @@ const (
 	EnvRetryMaxAttempts     = "SYNCORE_VERIFIER_RETRY_MAX_ATTEMPTS"
 	EnvRetryBackoff         = "SYNCORE_VERIFIER_RETRY_BACKOFF"
 	EnvWebhookSigningKey    = "SYNCORE_VERIFIER_WEBHOOK_SIGNING_KEY"
+	EnvRateLimitPerMinute   = "SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE"
 )
 
 // Config is the validated runtime configuration.
@@ -89,6 +90,9 @@ type Config struct {
 	RetryBackoff time.Duration
 	// WebhookSigningKey signs async-batch completion webhooks. Empty disables signing.
 	WebhookSigningKey string
+	// RateLimitPerMinute limits requests per client (bearer token or IP) per
+	// minute; 0 disables rate limiting.
+	RateLimitPerMinute int64
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -175,6 +179,9 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	cfg.WebhookSigningKey = get(lookup, EnvWebhookSigningKey, "")
+	if cfg.RateLimitPerMinute, err = parseNonNegativeInt(lookup, EnvRateLimitPerMinute, 0); err != nil {
+		return nil, err
+	}
 
 	// FROM_EMAIL and HELLO_NAME are only used for SMTP, so they are validated
 	// only when SMTP is enabled; otherwise they must not block startup.

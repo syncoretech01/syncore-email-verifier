@@ -44,6 +44,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, int64(0), cfg.RetryMaxAttempts)
 	assert.Equal(t, time.Duration(0), cfg.RetryBackoff)
 	assert.Equal(t, "", cfg.WebhookSigningKey)
+	assert.Equal(t, int64(0), cfg.RateLimitPerMinute)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -73,6 +74,7 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvRetryMaxAttempts:   "3",
 		EnvRetryBackoff:       "5s",
 		EnvWebhookSigningKey:  "hook-secret",
+		EnvRateLimitPerMinute: "120",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -100,6 +102,7 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.Equal(t, int64(3), cfg.RetryMaxAttempts)
 	assert.Equal(t, 5*time.Second, cfg.RetryBackoff)
 	assert.Equal(t, "hook-secret", cfg.WebhookSigningKey)
+	assert.Equal(t, int64(120), cfg.RateLimitPerMinute)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {

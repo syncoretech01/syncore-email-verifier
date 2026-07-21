@@ -18,6 +18,7 @@ import (
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/metrics"
+	"github.com/AfterShip/email-verifier/internal/ratelimit"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
@@ -60,6 +61,8 @@ type Handlers struct {
 	metrics *metrics.Registry
 	logger  *slog.Logger
 	ready   func(context.Context) error
+	// rateLimiter is nil when rate limiting is disabled.
+	rateLimiter *ratelimit.Limiter
 }
 
 // handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
@@ -74,6 +77,7 @@ type handlerOpts struct {
 	metrics            *metrics.Registry
 	logger             *slog.Logger
 	ready              func(context.Context) error
+	rateLimiter        *ratelimit.Limiter
 }
 
 func newHandlers(o handlerOpts) *Handlers {
@@ -105,6 +109,7 @@ func newHandlers(o handlerOpts) *Handlers {
 		metrics:            o.metrics,
 		logger:             o.logger,
 		ready:              o.ready,
+		rateLimiter:        o.rateLimiter,
 	}
 }
 

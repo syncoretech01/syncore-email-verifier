@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 
 	"github.com/AfterShip/email-verifier/internal/config"
+	"github.com/AfterShip/email-verifier/internal/ratelimit"
 )
 
 // newRouter wires the routes and cross-cutting handlers, returning the fully
@@ -41,8 +43,42 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 	})
 
 	// Outermost: observe (records + logs, sees the final status). Then panic
-	// recovery, then auth, then the router.
-	return observeMiddleware(h.metrics, h.logger, recoverMiddleware(authMiddleware(authToken, router)))
+	// recovery, then auth, then rate-limit, then the router.
+	return observeMiddleware(h.metrics, h.logger,
+		recoverMiddleware(authMiddleware(authToken, rateLimitMiddleware(h.rateLimiter, router))))
+}
+
+// rateLimitMiddleware enforces a per-client token-bucket limit, keyed by the
+// bearer token when present, else the remote IP. /health and /ready are exempt.
+// A nil limiter is a pass-through.
+func rateLimitMiddleware(limiter *ratelimit.Limiter, next http.Handler) http.Handler {
+	if limiter == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAuthExempt(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !limiter.Allow(clientKey(r)) {
+			writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientKey identifies the caller for rate limiting: the bearer token if present
+// (a stable per-key identity), otherwise the request's remote host.
+func clientKey(r *http.Request) string {
+	if tok, ok := bearerToken(r.Header.Get("Authorization")); ok && tok != "" {
+		return "tok:" + tok
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return "ip:" + host
 }
 
 // isAuthExempt reports whether a path stays open when auth is enabled, so probes
