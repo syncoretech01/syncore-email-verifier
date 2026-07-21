@@ -16,6 +16,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 
 	emailverifier "github.com/AfterShip/email-verifier"
+	"github.com/AfterShip/email-verifier/internal/feedback"
 	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/metrics"
 	"github.com/AfterShip/email-verifier/internal/ratelimit"
@@ -67,6 +68,10 @@ type Handlers struct {
 	apiKeyHashes map[string]string
 	// erase removes an address's cached data (right-to-erasure). nil disables it.
 	erase func(ctx context.Context, email string) error
+	// feedbackStore ingests sending outcomes; feedbackKey signs the ingestion
+	// endpoint. Both empty/nil disables POST /v1/feedback.
+	feedbackStore *feedback.Store
+	feedbackKey   []byte
 }
 
 // handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
@@ -84,6 +89,8 @@ type handlerOpts struct {
 	rateLimiter        *ratelimit.Limiter
 	apiKeyHashes       map[string]string
 	erase              func(ctx context.Context, email string) error
+	feedbackStore      *feedback.Store
+	feedbackKey        []byte
 }
 
 func newHandlers(o handlerOpts) *Handlers {
@@ -118,6 +125,8 @@ func newHandlers(o handlerOpts) *Handlers {
 		rateLimiter:        o.rateLimiter,
 		apiKeyHashes:       o.apiKeyHashes,
 		erase:              o.erase,
+		feedbackStore:      o.feedbackStore,
+		feedbackKey:        o.feedbackKey,
 	}
 }
 

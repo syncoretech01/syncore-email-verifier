@@ -16,6 +16,7 @@ import (
 
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/config"
+	"github.com/AfterShip/email-verifier/internal/feedback"
 	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/metrics"
 	"github.com/AfterShip/email-verifier/internal/ratelimit"
@@ -52,6 +53,9 @@ func main() {
 	if cfg.RateLimitPerMinute > 0 {
 		limiter = ratelimit.New(int(cfg.RateLimitPerMinute))
 	}
+
+	// Per-domain feedback/reputation store (fed by POST /v1/feedback).
+	feedbackStore := feedback.New()
 
 	// Store backend (in-memory or Postgres) shared by the result cache and the
 	// idempotency store.
@@ -104,6 +108,8 @@ func main() {
 		erase: func(ctx context.Context, email string) error {
 			return cacheStore.Delete(ctx, strings.ToLower(strings.TrimSpace(email)))
 		},
+		feedbackStore: feedbackStore,
+		feedbackKey:   []byte(cfg.FeedbackSigningKey),
 	})
 	server := newServer(cfg, handlers)
 

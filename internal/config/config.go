@@ -44,6 +44,7 @@ const (
 	EnvRateLimitPerMinute   = "SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE"
 	EnvAPIKeys              = "SYNCORE_VERIFIER_API_KEYS"
 	EnvSuppressEmails       = "SYNCORE_VERIFIER_SUPPRESS_EMAILS"
+	EnvFeedbackSigningKey   = "SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY"
 )
 
 // Config is the validated runtime configuration.
@@ -102,6 +103,9 @@ type Config struct {
 	// SuppressEmails seeds the do-not-verify list; suppressed addresses skip all
 	// network checks and return suppressed=true.
 	SuppressEmails []string
+	// FeedbackSigningKey enables the HMAC-signed feedback ingestion endpoint.
+	// Empty disables POST /v1/feedback.
+	FeedbackSigningKey string
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -193,6 +197,7 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	cfg.SuppressEmails = parseList(get(lookup, EnvSuppressEmails, ""))
+	cfg.FeedbackSigningKey = get(lookup, EnvFeedbackSigningKey, "")
 
 	// FROM_EMAIL and HELLO_NAME are only used for SMTP, so they are validated
 	// only when SMTP is enabled; otherwise they must not block startup.
