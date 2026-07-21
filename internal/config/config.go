@@ -43,6 +43,7 @@ const (
 	EnvWebhookSigningKey    = "SYNCORE_VERIFIER_WEBHOOK_SIGNING_KEY"
 	EnvRateLimitPerMinute   = "SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE"
 	EnvAPIKeys              = "SYNCORE_VERIFIER_API_KEYS"
+	EnvSuppressEmails       = "SYNCORE_VERIFIER_SUPPRESS_EMAILS"
 )
 
 // Config is the validated runtime configuration.
@@ -98,6 +99,9 @@ type Config struct {
 	// APIKeys are additional accepted credentials, each an optional "name:key"
 	// (or bare "key"). Any valid API key authenticates like the bearer token.
 	APIKeys []string
+	// SuppressEmails seeds the do-not-verify list; suppressed addresses skip all
+	// network checks and return suppressed=true.
+	SuppressEmails []string
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -188,6 +192,7 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	if cfg.RateLimitPerMinute, err = parseNonNegativeInt(lookup, EnvRateLimitPerMinute, 0); err != nil {
 		return nil, err
 	}
+	cfg.SuppressEmails = parseList(get(lookup, EnvSuppressEmails, ""))
 
 	// FROM_EMAIL and HELLO_NAME are only used for SMTP, so they are validated
 	// only when SMTP is enabled; otherwise they must not block startup.

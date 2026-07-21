@@ -86,6 +86,10 @@ type Assessment struct {
 	SMTPAttempted   bool
 	SMTPCheckReason classify.SMTPCheckReason
 
+	// Suppressed is true when the address is on the do-not-verify list; when set,
+	// no network check was performed.
+	Suppressed bool
+
 	Error *ErrorInfo
 
 	// Result is the legacy-compatible evidence for the later GET presenter.
@@ -99,6 +103,7 @@ type Service struct {
 	smtpEnabled  bool
 	domainHealth bool
 	lookupTXT    func(name string) ([]string, error)
+	suppressed   func(email string) bool
 }
 
 // Option configures a Service.
@@ -134,6 +139,12 @@ func WithTXTLookup(fn func(name string) ([]string, error)) Option {
 	}
 }
 
+// WithSuppressionCheck injects a predicate that reports whether an address is on
+// the do-not-verify list. Suppressed addresses skip all network checks.
+func WithSuppressionCheck(fn func(email string) bool) Option {
+	return func(s *Service) { s.suppressed = fn }
+}
+
 // NewService builds a Service. By default SMTP checks are enabled, CheckedAt
 // uses the wall clock in UTC, and domain-health checks are off.
 func NewService(engine Engine, opts ...Option) *Service {
@@ -159,6 +170,11 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 	_ = ctx // not used for cancellation in Phase 1
 
 	email := strings.TrimSpace(rawEmail)
+
+	// Suppression is honored before any network check.
+	if s.suppressed != nil && s.suppressed(email) {
+		return s.suppressedAssessment(email)
+	}
 
 	syntax := s.engine.ParseAddress(email)
 	ev := classify.Evidence{Email: email, SyntaxValid: syntax.Valid}
@@ -211,6 +227,26 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 		a.Domain.Health = s.checkDomainHealth(syntax.Domain, ev)
 	}
 	return a
+}
+
+// suppressedAssessment returns a network-free result for a do-not-verify address.
+// It is marked risky (do not send) with the Suppressed flag set; no MX/SMTP is
+// performed. Syntax is still parsed (network-free) for a structured response.
+func (s *Service) suppressedAssessment(email string) Assessment {
+	syntax := s.engine.ParseAddress(email)
+	return Assessment{
+		Email:      email,
+		Status:     classify.StatusRisky,
+		Suppressed: true,
+		CheckedAt:  s.clock(),
+		Syntax:     syntax,
+		Error:      &ErrorInfo{Code: "policy", Message: "address is on the suppression list"},
+		Result: &emailverifier.Result{
+			Email:     email,
+			Reachable: "unknown",
+			Syntax:    syntax,
+		},
+	}
 }
 
 // runSMTP performs the recipient check and folds its evidence into ev, preserving

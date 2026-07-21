@@ -439,6 +439,7 @@ type verificationDTO struct {
 	Retryable           bool       `json:"retryable"`
 	Confidence          int        `json:"confidence"`
 	DeliverabilityScore int        `json:"deliverability_score"`
+	Suppressed          bool       `json:"suppressed"`
 	CheckedAt           string     `json:"checked_at"`
 	Source              string     `json:"source"`
 	Syntax              syntaxDTO  `json:"syntax"`
@@ -473,6 +474,7 @@ func toVerification(a verification.Assessment) verificationDTO {
 		Retryable:           a.Retryable,
 		Confidence:          a.Confidence,
 		DeliverabilityScore: a.DeliverabilityScore,
+		Suppressed:          a.Suppressed,
 		CheckedAt:           formatCheckedAt(a.CheckedAt),
 		Source:              a.Source,
 		Syntax: syntaxDTO{

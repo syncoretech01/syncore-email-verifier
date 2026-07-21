@@ -20,6 +20,7 @@ import (
 	"github.com/AfterShip/email-verifier/internal/metrics"
 	"github.com/AfterShip/email-verifier/internal/ratelimit"
 	"github.com/AfterShip/email-verifier/internal/store"
+	"github.com/AfterShip/email-verifier/internal/suppression"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
 
@@ -33,10 +34,12 @@ func main() {
 
 	// One reusable verifier and one reusable verification service.
 	engine := buildVerifier(cfg)
+	suppressList := suppression.NewFromList(cfg.SuppressEmails)
 	svc := verification.NewService(
 		engine,
 		verification.WithSMTPEnabled(cfg.SMTPEnabled),
 		verification.WithDomainHealth(cfg.DomainHealth),
+		verification.WithSuppressionCheck(suppressList.Contains),
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
 

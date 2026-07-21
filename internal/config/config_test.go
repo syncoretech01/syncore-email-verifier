@@ -46,6 +46,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "", cfg.WebhookSigningKey)
 	assert.Equal(t, int64(0), cfg.RateLimitPerMinute)
 	assert.Empty(t, cfg.APIKeys)
+	assert.Empty(t, cfg.SuppressEmails)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -77,6 +78,7 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvWebhookSigningKey:  "hook-secret",
 		EnvRateLimitPerMinute: "120",
 		EnvAPIKeys:            "crm:key-1, partner:key-2 ,bare-key",
+		EnvSuppressEmails:     "blocked@x.com,spammer@y.com",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -106,6 +108,7 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.Equal(t, "hook-secret", cfg.WebhookSigningKey)
 	assert.Equal(t, int64(120), cfg.RateLimitPerMinute)
 	assert.Equal(t, []string{"crm:key-1", "partner:key-2", "bare-key"}, cfg.APIKeys)
+	assert.Equal(t, []string{"blocked@x.com", "spammer@y.com"}, cfg.SuppressEmails)
 }
 
 func TestLoad_NonLoopbackBindWithAPIKeysOK(t *testing.T) {
