@@ -26,7 +26,7 @@ func (s *countingHandlerService) Verify(_ context.Context, email string) verific
 func newIdempotentServer(t *testing.T, svc VerificationService) http.Handler {
 	t.Helper()
 	idem := store.NewMemory[verification.Assessment](100)
-	return newRouter(newHandlers(svc, 4096, defaultTestBatch, idem, nil, 0), "")
+	return newRouter(newHandlers(handlerOpts{svc: svc, batch: defaultTestBatch, idempotency: idem, logger: testLogger}), "")
 }
 
 // postIdem issues a POST /v1/verifications with an optional Idempotency-Key.

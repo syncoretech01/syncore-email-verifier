@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/config"
 	"github.com/AfterShip/email-verifier/internal/jobs"
+	"github.com/AfterShip/email-verifier/internal/metrics"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
@@ -34,9 +36,13 @@ func main() {
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
 
+	// Structured logs + a dependency-free metrics registry.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	registry := metrics.New()
+
 	// Store backend (in-memory or Postgres) shared by the result cache and the
 	// idempotency store.
-	cacheStore, idemStore, closeStore, err := buildStores(context.Background(), cfg)
+	cacheStore, idemStore, readyFn, closeStore, err := buildStores(context.Background(), cfg)
 	if err != nil {
 		log.Fatalf("store initialization error: %v", err)
 	}
@@ -66,11 +72,21 @@ func main() {
 	jobsMgr.Start()
 	defer jobsMgr.Stop()
 
-	handlers := newHandlers(vs, cfg.MaxBodyBytes, batchConfig{
-		maxItems:     int(cfg.BatchMaxItems),
-		concurrency:  int(cfg.BatchConcurrency),
-		maxBodyBytes: cfg.BatchMaxBodyBytes,
-	}, idemStore, jobsMgr, int(cfg.AsyncBatchMaxItems))
+	handlers := newHandlers(handlerOpts{
+		svc:          vs,
+		maxBodyBytes: cfg.MaxBodyBytes,
+		batch: batchConfig{
+			maxItems:     int(cfg.BatchMaxItems),
+			concurrency:  int(cfg.BatchConcurrency),
+			maxBodyBytes: cfg.BatchMaxBodyBytes,
+		},
+		idempotency:        idemStore,
+		jobs:               jobsMgr,
+		asyncBatchMaxItems: int(cfg.AsyncBatchMaxItems),
+		metrics:            registry,
+		logger:             logger,
+		ready:              readyFn,
+	})
 	server := newServer(cfg, handlers)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -105,23 +121,25 @@ func main() {
 // store. For Postgres both share one connection pool (and table, via distinct
 // key namespaces); for memory each gets its own bounded map. closeFn releases
 // any resources (the pool) and is safe to defer.
-func buildStores(ctx context.Context, cfg *config.Config) (cache, idem store.Store[verification.Assessment], closeFn func(), err error) {
+func buildStores(ctx context.Context, cfg *config.Config) (cache, idem store.Store[verification.Assessment], ready func(context.Context) error, closeFn func(), err error) {
 	switch cfg.Store {
 	case "postgres":
 		pool, err := store.NewPool(ctx, cfg.DatabaseURL)
 		if err != nil {
-			return nil, nil, func() {}, err
+			return nil, nil, nil, func() {}, err
 		}
 		pg, err := store.NewPostgres[verification.Assessment](ctx, pool)
 		if err != nil {
 			pool.Close()
-			return nil, nil, func() {}, err
+			return nil, nil, nil, func() {}, err
 		}
-		return pg, pg, pool.Close, nil
+		readyFn := func(ctx context.Context) error { return pool.Ping(ctx) }
+		return pg, pg, readyFn, pool.Close, nil
 	default:
 		max := int(cfg.CacheMaxEntries)
 		return store.NewMemory[verification.Assessment](max),
 			store.NewMemory[verification.Assessment](max),
+			func(context.Context) error { return nil },
 			func() {}, nil
 	}
 }

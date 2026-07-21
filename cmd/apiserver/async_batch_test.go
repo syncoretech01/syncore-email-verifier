@@ -17,7 +17,7 @@ func newAsyncServer(t *testing.T, svc VerificationService, maxItems int) http.Ha
 	mgr := jobs.NewManager(svc, jobs.Config{Workers: 2})
 	mgr.Start()
 	t.Cleanup(mgr.Stop)
-	return newRouter(newHandlers(svc, 4096, defaultTestBatch, nil, mgr, maxItems), "")
+	return newRouter(newHandlers(handlerOpts{svc: svc, batch: defaultTestBatch, jobs: mgr, asyncBatchMaxItems: maxItems, logger: testLogger}), "")
 }
 
 func pollBatchDone(t *testing.T, h http.Handler, id string) jobs.Batch {

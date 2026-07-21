@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/jobs"
+	"github.com/AfterShip/email-verifier/internal/metrics"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
@@ -54,28 +56,55 @@ type Handlers struct {
 	// jobs runs asynchronous batch verifications. nil disables the /batches API.
 	jobs               *jobs.Manager
 	asyncBatchMaxItems int
+	// Observability. metrics/ready may be nil (feature off); logger defaults.
+	metrics *metrics.Registry
+	logger  *slog.Logger
+	ready   func(context.Context) error
 }
 
-func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig, idempotency store.Store[verification.Assessment], jobsMgr *jobs.Manager, asyncBatchMaxItems int) *Handlers {
-	if batch.maxItems <= 0 {
-		batch.maxItems = 100
+// handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
+// their zero value.
+type handlerOpts struct {
+	svc                VerificationService
+	maxBodyBytes       int64
+	batch              batchConfig
+	idempotency        store.Store[verification.Assessment]
+	jobs               *jobs.Manager
+	asyncBatchMaxItems int
+	metrics            *metrics.Registry
+	logger             *slog.Logger
+	ready              func(context.Context) error
+}
+
+func newHandlers(o handlerOpts) *Handlers {
+	if o.batch.maxItems <= 0 {
+		o.batch.maxItems = 100
 	}
-	if batch.concurrency <= 0 {
-		batch.concurrency = 10
+	if o.batch.concurrency <= 0 {
+		o.batch.concurrency = 10
 	}
-	if batch.maxBodyBytes <= 0 {
-		batch.maxBodyBytes = 65536
+	if o.batch.maxBodyBytes <= 0 {
+		o.batch.maxBodyBytes = 65536
 	}
-	if asyncBatchMaxItems <= 0 {
-		asyncBatchMaxItems = 10000
+	if o.asyncBatchMaxItems <= 0 {
+		o.asyncBatchMaxItems = 10000
+	}
+	if o.maxBodyBytes <= 0 {
+		o.maxBodyBytes = 4096
+	}
+	if o.logger == nil {
+		o.logger = slog.Default()
 	}
 	return &Handlers{
-		svc:                svc,
-		maxBodyBytes:       maxBodyBytes,
-		batch:              batch,
-		idempotency:        idempotency,
-		jobs:               jobsMgr,
-		asyncBatchMaxItems: asyncBatchMaxItems,
+		svc:                o.svc,
+		maxBodyBytes:       o.maxBodyBytes,
+		batch:              o.batch,
+		idempotency:        o.idempotency,
+		jobs:               o.jobs,
+		asyncBatchMaxItems: o.asyncBatchMaxItems,
+		metrics:            o.metrics,
+		logger:             o.logger,
+		ready:              o.ready,
 	}
 }
 
@@ -95,6 +124,7 @@ func (h *Handlers) handleGetVerification(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	a := h.svc.Verify(r.Context(), trimmed)
+	h.recordVerification(string(a.Status))
 	writeJSON(w, http.StatusOK, toLegacyResponse(a))
 }
 
@@ -143,12 +173,14 @@ func (h *Handlers) handleVerifications(w http.ResponseWriter, r *http.Request, _
 	idemKey := idempotencyKey(r.Header.Get("Idempotency-Key"))
 	if idemKey != "" && h.idempotency != nil {
 		if a, ok, err := h.idempotency.Get(r.Context(), idemKey); err == nil && ok {
+			h.recordVerification(string(a.Status))
 			writeJSON(w, http.StatusOK, toVerification(a))
 			return
 		}
 	}
 
 	a := h.svc.Verify(r.Context(), trimmed)
+	h.recordVerification(string(a.Status))
 
 	if idemKey != "" && h.idempotency != nil {
 		if err := h.idempotency.Set(r.Context(), idemKey, a, idempotencyTTL); err != nil {

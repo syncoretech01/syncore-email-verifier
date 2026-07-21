@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testLogger silences access logs during tests.
+var testLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 var checkedAt = time.Date(2026, 7, 13, 19, 5, 29, 0, time.UTC)
 
@@ -44,25 +49,19 @@ var defaultTestBatch = batchConfig{maxItems: 100, concurrency: 10, maxBodyBytes:
 
 func newTestServer(t *testing.T, svc VerificationService, maxBody int64) http.Handler {
 	t.Helper()
-	if maxBody == 0 {
-		maxBody = 4096
-	}
-	return newRouter(newHandlers(svc, maxBody, defaultTestBatch, nil, nil, 0), "")
+	return newRouter(newHandlers(handlerOpts{svc: svc, maxBodyBytes: maxBody, batch: defaultTestBatch, logger: testLogger}), "")
 }
 
 // newTestServerWithAuth builds the real router with bearer auth enabled.
 func newTestServerWithAuth(t *testing.T, svc VerificationService, maxBody int64, token string) http.Handler {
 	t.Helper()
-	if maxBody == 0 {
-		maxBody = 4096
-	}
-	return newRouter(newHandlers(svc, maxBody, defaultTestBatch, nil, nil, 0), token)
+	return newRouter(newHandlers(handlerOpts{svc: svc, maxBodyBytes: maxBody, batch: defaultTestBatch, logger: testLogger}), token)
 }
 
 // newTestBatchServer builds the router with a custom batch config for batch tests.
 func newTestBatchServer(t *testing.T, svc VerificationService, batch batchConfig) http.Handler {
 	t.Helper()
-	return newRouter(newHandlers(svc, 4096, batch, nil, nil, 0), "")
+	return newRouter(newHandlers(handlerOpts{svc: svc, batch: batch, logger: testLogger}), "")
 }
 
 func do(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {

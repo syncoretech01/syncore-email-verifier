@@ -28,6 +28,8 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 	router.GET("/batches/:id", h.handleBatchStatus)
 	router.GET("/batches/:id/results", h.handleBatchResults)
 	router.GET("/health", h.handleHealth)
+	router.GET("/ready", h.handleReady)
+	router.GET("/metrics", h.handleMetrics)
 
 	router.NotFound = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "resource not found")
@@ -38,12 +40,17 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	})
 
-	return recoverMiddleware(authMiddleware(authToken, router))
+	// Outermost: observe (records + logs, sees the final status). Then panic
+	// recovery, then auth, then the router.
+	return observeMiddleware(h.metrics, h.logger, recoverMiddleware(authMiddleware(authToken, router)))
 }
 
-// healthPath is the one route that stays open when auth is enabled, so probes
-// and load balancers can check liveness without a credential.
-const healthPath = "/health"
+// isAuthExempt reports whether a path stays open when auth is enabled, so probes
+// and load balancers can check liveness/readiness without a credential. /metrics
+// stays authenticated (it carries operational data).
+func isAuthExempt(path string) bool {
+	return path == "/health" || path == "/ready"
+}
 
 // authMiddleware enforces a bearer token on every route except /health. When the
 // token is empty, auth is disabled and the middleware is a pass-through (only
@@ -55,7 +62,7 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 	}
 	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == healthPath {
+		if isAuthExempt(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
