@@ -88,6 +88,12 @@ func (p *Postgres[V]) Set(ctx context.Context, key string, value V, ttl time.Dur
 	return err
 }
 
+// Delete removes key (no error if absent).
+func (p *Postgres[V]) Delete(ctx context.Context, key string) error {
+	_, err := p.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE key = $1`, p.table), key)
+	return err
+}
+
 // PurgeExpired deletes expired rows. Optional housekeeping; expiry is already
 // enforced on read.
 func (p *Postgres[V]) PurgeExpired(ctx context.Context) error {

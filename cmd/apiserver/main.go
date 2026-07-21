@@ -101,6 +101,9 @@ func main() {
 		ready:              readyFn,
 		rateLimiter:        limiter,
 		apiKeyHashes:       apiKeyHashes(cfg.APIKeys),
+		erase: func(ctx context.Context, email string) error {
+			return cacheStore.Delete(ctx, strings.ToLower(strings.TrimSpace(email)))
+		},
 	})
 	server := newServer(cfg, handlers)
 

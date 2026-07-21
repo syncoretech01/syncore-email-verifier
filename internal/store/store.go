@@ -19,6 +19,8 @@ type Store[V any] interface {
 	Get(ctx context.Context, key string) (value V, ok bool, err error)
 	// Set stores value under key for ttl. A ttl <= 0 is a no-op.
 	Set(ctx context.Context, key string, value V, ttl time.Duration) error
+	// Delete removes key (no error if absent). Used for right-to-erasure.
+	Delete(ctx context.Context, key string) error
 }
 
 type entry[V any] struct {
@@ -98,6 +100,14 @@ func (m *Memory[V]) Set(_ context.Context, key string, value V, ttl time.Duratio
 		m.order = append(m.order, key)
 	}
 	m.entries[key] = entry[V]{value: value, expiresAt: m.now().Add(ttl)}
+	return nil
+}
+
+// Delete removes key. The context is ignored; it never errors.
+func (m *Memory[V]) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	m.remove(key)
+	m.mu.Unlock()
 	return nil
 }
 

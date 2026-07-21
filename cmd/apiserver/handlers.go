@@ -65,6 +65,8 @@ type Handlers struct {
 	rateLimiter *ratelimit.Limiter
 	// apiKeyHashes maps sha256(key) hex -> client name; additional accepted creds.
 	apiKeyHashes map[string]string
+	// erase removes an address's cached data (right-to-erasure). nil disables it.
+	erase func(ctx context.Context, email string) error
 }
 
 // handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
@@ -81,6 +83,7 @@ type handlerOpts struct {
 	ready              func(context.Context) error
 	rateLimiter        *ratelimit.Limiter
 	apiKeyHashes       map[string]string
+	erase              func(ctx context.Context, email string) error
 }
 
 func newHandlers(o handlerOpts) *Handlers {
@@ -114,6 +117,7 @@ func newHandlers(o handlerOpts) *Handlers {
 		ready:              o.ready,
 		rateLimiter:        o.rateLimiter,
 		apiKeyHashes:       o.apiKeyHashes,
+		erase:              o.erase,
 	}
 }
 
@@ -190,6 +194,7 @@ func (h *Handlers) handleVerifications(w http.ResponseWriter, r *http.Request, _
 
 	a := h.svc.Verify(r.Context(), trimmed)
 	h.recordVerification(string(a.Status))
+	h.audit("verification", trimmed)
 
 	if idemKey != "" && h.idempotency != nil {
 		if err := h.idempotency.Set(r.Context(), idemKey, a, idempotencyTTL); err != nil {

@@ -84,6 +84,15 @@ func TestMemory_EvictsOldestWhenFull(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestMemory_Delete(t *testing.T) {
+	m := NewMemory[string](10)
+	mustSet(t, m, "k", "v", time.Minute)
+	require.NoError(t, m.Delete(bg, "k"))
+	_, ok := mustGet(t, m, "k")
+	assert.False(t, ok)
+	require.NoError(t, m.Delete(bg, "absent"), "deleting an absent key is a no-op")
+}
+
 func TestMemory_ReSetKeepsSingleEntry(t *testing.T) {
 	clk := newClock()
 	m := NewMemory[string](10, WithClock[string](clk.now))

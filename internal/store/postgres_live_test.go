@@ -54,6 +54,13 @@ func TestPostgres_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "expired row must read as absent")
 
+	// Delete removes a live key.
+	require.NoError(t, pg.Set(ctx, "del-key", "x", time.Minute))
+	require.NoError(t, pg.Delete(ctx, "del-key"))
+	_, ok, err = pg.Get(ctx, "del-key")
+	require.NoError(t, err)
+	require.False(t, ok, "deleted key must be absent")
+
 	// Missing key.
 	_, ok, err = pg.Get(ctx, "nope")
 	require.NoError(t, err)
