@@ -33,21 +33,28 @@ func main() {
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
 
-	// Optional in-memory result cache: enabled only when a positive TTL is set.
-	// The handler depends on the VerificationService interface, so the cache
-	// decorator drops in transparently.
+	// Store backend (in-memory or Postgres) shared by the result cache and the
+	// idempotency store.
+	cacheStore, idemStore, closeStore, err := buildStores(context.Background(), cfg)
+	if err != nil {
+		log.Fatalf("store initialization error: %v", err)
+	}
+	defer closeStore()
+
+	// Optional result cache: enabled only when a positive TTL is set. The handler
+	// depends on the VerificationService interface, so the cache decorator drops
+	// in transparently.
 	var vs VerificationService = svc
 	if cfg.CacheTTL > 0 {
-		cache := store.NewMemory[verification.Assessment](int(cfg.CacheMaxEntries))
-		vs = verification.NewCachingVerifier(svc, cache, cfg.CacheTTL, cfg.CacheTTLUnknown)
-		log.Printf("result cache enabled (ttl=%s, unknown_ttl=%s, max_entries=%d)", cfg.CacheTTL, cfg.CacheTTLUnknown, cfg.CacheMaxEntries)
+		vs = verification.NewCachingVerifier(svc, cacheStore, cfg.CacheTTL, cfg.CacheTTLUnknown)
+		log.Printf("result cache enabled (store=%s, ttl=%s, unknown_ttl=%s)", cfg.Store, cfg.CacheTTL, cfg.CacheTTLUnknown)
 	}
 
 	handlers := newHandlers(vs, cfg.MaxBodyBytes, batchConfig{
 		maxItems:     int(cfg.BatchMaxItems),
 		concurrency:  int(cfg.BatchConcurrency),
 		maxBodyBytes: cfg.BatchMaxBodyBytes,
-	})
+	}, idemStore)
 	server := newServer(cfg, handlers)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,6 +82,31 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown error: %v", err)
+	}
+}
+
+// buildStores builds the store backend for the result cache and idempotency
+// store. For Postgres both share one connection pool (and table, via distinct
+// key namespaces); for memory each gets its own bounded map. closeFn releases
+// any resources (the pool) and is safe to defer.
+func buildStores(ctx context.Context, cfg *config.Config) (cache, idem store.Store[verification.Assessment], closeFn func(), err error) {
+	switch cfg.Store {
+	case "postgres":
+		pool, err := store.NewPool(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return nil, nil, func() {}, err
+		}
+		pg, err := store.NewPostgres[verification.Assessment](ctx, pool)
+		if err != nil {
+			pool.Close()
+			return nil, nil, func() {}, err
+		}
+		return pg, pg, pool.Close, nil
+	default:
+		max := int(cfg.CacheMaxEntries)
+		return store.NewMemory[verification.Assessment](max),
+			store.NewMemory[verification.Assessment](max),
+			func() {}, nil
 	}
 }
 

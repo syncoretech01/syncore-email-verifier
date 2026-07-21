@@ -147,7 +147,7 @@ func TestBatch_Oversize413(t *testing.T) {
 }
 
 func TestBatch_AuthRequired(t *testing.T) {
-	h := newRouter(newHandlers(okService(), 4096, defaultTestBatch), testAuthToken)
+	h := newRouter(newHandlers(okService(), 4096, defaultTestBatch, nil), testAuthToken)
 	rec := doAuth(t, h, http.MethodPost, "/v1/verifications:batch", "application/json", `{"emails":["a@x.com"]}`, "")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 

@@ -15,11 +15,19 @@ import (
 	"github.com/julienschmidt/httprouter"
 
 	emailverifier "github.com/AfterShip/email-verifier"
+	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
 
 // maxEmailBytes is the RFC 5321 maximum length of an email address.
 const maxEmailBytes = 254
+
+// Idempotency-Key handling for POST /v1/verifications.
+const (
+	idempotencyTTL          = 24 * time.Hour
+	maxIdempotencyKeyBytes  = 255
+	idempotencyKeyNamespace = "idem:"
+)
 
 // VerificationService is the behavior the handlers need. The Phase 1B
 // *verification.Service satisfies it; tests substitute a stub.
@@ -39,9 +47,12 @@ type Handlers struct {
 	svc          VerificationService
 	maxBodyBytes int64
 	batch        batchConfig
+	// idempotency memoizes POST results by Idempotency-Key so a retried CRM call
+	// returns the same result without re-verifying. nil disables the feature.
+	idempotency store.Store[verification.Assessment]
 }
 
-func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig) *Handlers {
+func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig, idempotency store.Store[verification.Assessment]) *Handlers {
 	if batch.maxItems <= 0 {
 		batch.maxItems = 100
 	}
@@ -51,7 +62,7 @@ func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig)
 	if batch.maxBodyBytes <= 0 {
 		batch.maxBodyBytes = 65536
 	}
-	return &Handlers{svc: svc, maxBodyBytes: maxBodyBytes, batch: batch}
+	return &Handlers{svc: svc, maxBodyBytes: maxBodyBytes, batch: batch, idempotency: idempotency}
 }
 
 // handleHealth is a liveness endpoint. It performs no DNS/SMTP/provider checks.
@@ -113,8 +124,34 @@ func (h *Handlers) handleVerifications(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 
+	// Idempotency: a repeated request with the same Idempotency-Key returns the
+	// stored result without re-verifying.
+	idemKey := idempotencyKey(r.Header.Get("Idempotency-Key"))
+	if idemKey != "" && h.idempotency != nil {
+		if a, ok, err := h.idempotency.Get(r.Context(), idemKey); err == nil && ok {
+			writeJSON(w, http.StatusOK, toVerification(a))
+			return
+		}
+	}
+
 	a := h.svc.Verify(r.Context(), trimmed)
+
+	if idemKey != "" && h.idempotency != nil {
+		if err := h.idempotency.Set(r.Context(), idemKey, a, idempotencyTTL); err != nil {
+			log.Printf("idempotency store set failed: %v", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, toVerification(a))
+}
+
+// idempotencyKey sanitizes the Idempotency-Key header and namespaces it. Returns
+// "" (idempotency skipped) for an empty, over-long, or control-bearing value.
+func idempotencyKey(raw string) string {
+	k := strings.TrimSpace(raw)
+	if k == "" || len(k) > maxIdempotencyKeyBytes || strings.IndexFunc(k, isControlRune) >= 0 {
+		return ""
+	}
+	return idempotencyKeyNamespace + k
 }
 
 // batchRequest is the structured batch input. meta is opaque and echoed back.

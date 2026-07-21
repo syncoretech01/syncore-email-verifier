@@ -33,6 +33,8 @@ const (
 	EnvBatchConcurrency     = "SYNCORE_VERIFIER_BATCH_CONCURRENCY"
 	EnvBatchMaxBodyBytes    = "SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES"
 	EnvDomainHealth         = "SYNCORE_VERIFIER_DOMAIN_HEALTH"
+	EnvStore                = "SYNCORE_VERIFIER_STORE"
+	EnvDatabaseURL          = "SYNCORE_VERIFIER_DATABASE_URL"
 )
 
 // Config is the validated runtime configuration.
@@ -67,6 +69,11 @@ type Config struct {
 	BatchMaxBodyBytes int64
 	// DomainHealth enables free SPF/DMARC/MX domain-health lookups (off by default).
 	DomainHealth bool
+	// Store selects the backend for the result cache and idempotency store:
+	// "memory" (default) or "postgres".
+	Store string
+	// DatabaseURL is the Postgres connection string; required when Store=postgres.
+	DatabaseURL string
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -130,6 +137,15 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	if cfg.DomainHealth, err = parseBool(lookup, EnvDomainHealth, false); err != nil {
 		return nil, err
+	}
+
+	cfg.Store = get(lookup, EnvStore, "memory")
+	if cfg.Store != "memory" && cfg.Store != "postgres" {
+		return nil, fmt.Errorf("%s: must be 'memory' or 'postgres'", EnvStore)
+	}
+	cfg.DatabaseURL = get(lookup, EnvDatabaseURL, "")
+	if cfg.Store == "postgres" && cfg.DatabaseURL == "" {
+		return nil, fmt.Errorf("%s: required when %s=postgres", EnvDatabaseURL, EnvStore)
 	}
 
 	// FROM_EMAIL and HELLO_NAME are only used for SMTP, so they are validated

@@ -2,6 +2,7 @@ package verification
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -48,11 +49,15 @@ func NewCachingVerifier(next verifier, cache store.Store[Assessment], ttl, unkno
 }
 
 // Verify returns a cached Assessment when one is live, otherwise runs the wrapped
-// verifier and caches the result under a normalized key.
+// verifier and caches the result under a normalized key. A cache backend error
+// (e.g. a transient database failure) is logged and degrades to a cache miss —
+// verification always proceeds.
 func (c *CachingVerifier) Verify(ctx context.Context, rawEmail string) Assessment {
 	key := normalizeCacheKey(rawEmail)
 	if key != "" {
-		if a, ok := c.cache.Get(key); ok {
+		if a, ok, err := c.cache.Get(ctx, key); err != nil {
+			log.Printf("result cache get failed, continuing without cache: %v", err)
+		} else if ok {
 			return a
 		}
 	}
@@ -60,7 +65,9 @@ func (c *CachingVerifier) Verify(ctx context.Context, rawEmail string) Assessmen
 	a := c.next.Verify(ctx, rawEmail)
 
 	if key != "" {
-		c.cache.Set(key, a, c.ttlFor(a))
+		if err := c.cache.Set(ctx, key, a, c.ttlFor(a)); err != nil {
+			log.Printf("result cache set failed: %v", err)
+		}
 	}
 	return a
 }

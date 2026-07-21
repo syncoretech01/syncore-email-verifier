@@ -37,6 +37,8 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, int64(10), cfg.BatchConcurrency)
 	assert.Equal(t, int64(65536), cfg.BatchMaxBodyBytes)
 	assert.False(t, cfg.DomainHealth)
+	assert.Equal(t, "memory", cfg.Store)
+	assert.Equal(t, "", cfg.DatabaseURL)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -59,6 +61,8 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvBatchConcurrency:  "5",
 		EnvBatchMaxBodyBytes: "131072",
 		EnvDomainHealth:      "true",
+		EnvStore:             "postgres",
+		EnvDatabaseURL:       "postgres://user:pass@localhost:5432/verifier",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -79,6 +83,8 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.Equal(t, int64(5), cfg.BatchConcurrency)
 	assert.Equal(t, int64(131072), cfg.BatchMaxBodyBytes)
 	assert.True(t, cfg.DomainHealth)
+	assert.Equal(t, "postgres", cfg.Store)
+	assert.Equal(t, "postgres://user:pass@localhost:5432/verifier", cfg.DatabaseURL)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -113,6 +119,8 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"negative batch concurrency", map[string]string{EnvBatchConcurrency: "-1"}, EnvBatchConcurrency},
 		{"non-integer batch body", map[string]string{EnvBatchMaxBodyBytes: "big"}, EnvBatchMaxBodyBytes},
 		{"invalid domain health bool", map[string]string{EnvDomainHealth: "maybe"}, EnvDomainHealth},
+		{"invalid store", map[string]string{EnvStore: "mysql"}, EnvStore},
+		{"postgres without database url", map[string]string{EnvStore: "postgres"}, EnvDatabaseURL},
 	}
 
 	for _, tc := range cases {

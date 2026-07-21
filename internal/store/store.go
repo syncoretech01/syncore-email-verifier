@@ -1,25 +1,24 @@
-// Package store provides small, dependency-free storage seams for the
-// verification service. Phase 2 ships an in-memory TTL cache; a durable backend
-// (e.g. Postgres) can implement the same Store interface later without changing
-// callers. It imports nothing from the rest of the service, so it never forms an
-// import cycle with the packages whose values it stores.
+// Package store provides small storage seams for the verification service. It
+// ships an in-memory TTL cache and a durable Postgres backend behind one generic
+// interface, so callers (e.g. the result cache) work unchanged with either. It
+// imports nothing from the rest of the service, so it never forms an import
+// cycle with the packages whose values it stores.
 package store
 
 import (
+	"context"
 	"sync"
 	"time"
 )
 
 // Store is a generic TTL key/value store. Implementations must be safe for
-// concurrent use by multiple goroutines.
+// concurrent use. Get/Set take a context and may return an error so durable
+// backends (Postgres) fit the same interface; the in-memory backend never errors.
 type Store[V any] interface {
-	// Get returns the live value for key, or ok=false if absent or expired.
-	Get(key string) (value V, ok bool)
-	// Set stores value under key for ttl. A ttl <= 0 is a no-op (nothing stored).
-	Set(key string, value V, ttl time.Duration)
-	// Len reports the number of stored entries (may include not-yet-purged
-	// expired ones). Intended for tests and metrics.
-	Len() int
+	// Get returns the live value for key, ok=false if absent or expired.
+	Get(ctx context.Context, key string) (value V, ok bool, err error)
+	// Set stores value under key for ttl. A ttl <= 0 is a no-op.
+	Set(ctx context.Context, key string, value V, ttl time.Duration) error
 }
 
 type entry[V any] struct {
@@ -27,16 +26,15 @@ type entry[V any] struct {
 	expiresAt time.Time
 }
 
-// Memory is an in-memory Store with lazy expiry and a hard entry cap. When the
-// cap is reached, the oldest-inserted entries are evicted first (FIFO). It is a
-// simple bounded cache, not a true LRU — adequate for the service's short-TTL
-// result cache.
+// Memory is an in-memory Store with lazy expiry and a hard entry cap (FIFO
+// eviction). A simple bounded cache, not a true LRU. It ignores the context and
+// never returns an error.
 type Memory[V any] struct {
 	mu         sync.Mutex
 	now        func() time.Time
 	maxEntries int
 	entries    map[string]entry[V]
-	order      []string // insertion order, for FIFO eviction
+	order      []string
 }
 
 // Option configures a Memory store.
@@ -69,28 +67,28 @@ func NewMemory[V any](maxEntries int, opts ...Option[V]) *Memory[V] {
 }
 
 // Get returns the live value for key. An expired entry is purged and reported as
-// absent.
-func (m *Memory[V]) Get(key string) (V, bool) {
+// absent. The context is ignored.
+func (m *Memory[V]) Get(_ context.Context, key string) (V, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	e, ok := m.entries[key]
 	if !ok {
 		var zero V
-		return zero, false
+		return zero, false, nil
 	}
 	if !m.now().Before(e.expiresAt) { // now >= expiresAt: expired
 		m.remove(key)
 		var zero V
-		return zero, false
+		return zero, false, nil
 	}
-	return e.value, true
+	return e.value, true, nil
 }
 
 // Set stores value under key for ttl. A non-positive ttl stores nothing.
-func (m *Memory[V]) Set(key string, value V, ttl time.Duration) {
+func (m *Memory[V]) Set(_ context.Context, key string, value V, ttl time.Duration) error {
 	if ttl <= 0 {
-		return
+		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -100,6 +98,7 @@ func (m *Memory[V]) Set(key string, value V, ttl time.Duration) {
 		m.order = append(m.order, key)
 	}
 	m.entries[key] = entry[V]{value: value, expiresAt: m.now().Add(ttl)}
+	return nil
 }
 
 // Len reports the current number of stored entries.
