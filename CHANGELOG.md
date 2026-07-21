@@ -2,6 +2,26 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Enterprise phases — persistence, async batch, observability, rate limiting
+
+Builds the enterprise capabilities from the roadmap that require no external infrastructure. All additive and config-flagged.
+
+**Persistence (Phase 2)**
+- New `internal/store` durable **Postgres backend** (`pgx`) behind the same generic `Store[V]` interface as the in-memory cache — jsonb + per-row TTL, idempotent migration, upsert. Select with `SYNCORE_VERIFIER_STORE=postgres` + `SYNCORE_VERIFIER_DATABASE_URL`. Verified against a real Postgres via a `//go:build live` integration test (excluded from the default suite).
+- **Idempotency keys**: `Idempotency-Key` on `POST /v1/verifications` returns the stored result without re-verifying.
+
+**Async batch (Phase 3)**
+- New `internal/jobs` async batch manager: bounded worker pool, per-item **retry** of retryable results (`RETRY_MAX_ATTEMPTS`/`RETRY_BACKOFF`), and **HMAC-SHA256-signed completion webhooks** (`WEBHOOK_SIGNING_KEY`), with graceful drain.
+- Endpoints (under `/batches`): `POST /batches`, `GET /batches/{id}`, `GET /batches/{id}/results?offset=&limit=`. Bounded by `ASYNC_BATCH_MAX_ITEMS`; worker pool sized by `WORKERS`.
+
+**Observability (Phase 9)**
+- New `internal/metrics`: a dependency-free **Prometheus text** registry. `GET /metrics` (auth-protected) exposes `verifications_total{status}`, `http_requests_total{route,method,code}`, and a request-duration histogram.
+- **Structured JSON access logs** (`log/slog`) with a per-request `X-Request-ID`; route labels are normalized so the email in the legacy GET path is never logged.
+- `GET /ready` readiness (pings Postgres when configured); `/health` and `/ready` stay open under auth.
+
+**Rate limiting (Phase 8, part 1)**
+- New `internal/ratelimit` token-bucket limiter. `SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` enforces a per-client (bearer token or IP) limit; over-limit → `429`.
+
 ## Growth OS foundation — auth, cache, batch, domain health
 
 Adds the net-new surface the CRM needs to call this service as Layer 1 of the verification waterfall. Additive and config-flagged: with no new variables set, behavior is unchanged.
