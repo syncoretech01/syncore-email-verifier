@@ -411,20 +411,28 @@ type syntaxDTO struct {
 }
 
 type domainDTO struct {
-	HasMXRecords   bool             `json:"has_mx_records"`
-	NullMX         bool             `json:"null_mx"`
-	ImplicitMX     bool             `json:"implicit_mx"`
-	MailHostSource string           `json:"mail_host_source"`
-	Disposable     bool             `json:"disposable"`
-	FreeProvider   bool             `json:"free_provider"`
-	Suggestion     string           `json:"suggestion"`
-	DomainHealth   *domainHealthDTO `json:"domain_health,omitempty"`
+	HasMXRecords   bool                 `json:"has_mx_records"`
+	NullMX         bool                 `json:"null_mx"`
+	ImplicitMX     bool                 `json:"implicit_mx"`
+	MailHostSource string               `json:"mail_host_source"`
+	Disposable     bool                 `json:"disposable"`
+	FreeProvider   bool                 `json:"free_provider"`
+	Suggestion     string               `json:"suggestion"`
+	DomainHealth   *domainHealthDTO     `json:"domain_health,omitempty"`
+	Reputation     *domainReputationDTO `json:"reputation,omitempty"`
 }
 
 type domainHealthDTO struct {
 	SPF   bool `json:"spf"`
 	DMARC bool `json:"dmarc"`
 	MX    bool `json:"mx"`
+}
+
+type domainReputationDTO struct {
+	Delivered  int     `json:"delivered"`
+	Bounced    int     `json:"bounced"`
+	Complained int     `json:"complained"`
+	BounceRate float64 `json:"bounce_rate"`
 }
 
 type scoreComponentsDTO struct {
@@ -517,6 +525,7 @@ func toVerification(a verification.Assessment) verificationDTO {
 			FreeProvider:   a.Domain.FreeProvider,
 			Suggestion:     a.Domain.Suggestion,
 			DomainHealth:   toDomainHealthDTO(a.Domain.Health),
+			Reputation:     toDomainReputationDTO(a.Domain.Reputation),
 		},
 		Account: accountDTO{RoleAccount: a.Account.RoleAccount},
 		SMTP:    toSMTPDTO(a),
@@ -531,6 +540,13 @@ func toDomainHealthDTO(h *verification.DomainHealthEvidence) *domainHealthDTO {
 		return nil
 	}
 	return &domainHealthDTO{SPF: h.SPF, DMARC: h.DMARC, MX: h.MX}
+}
+
+func toDomainReputationDTO(r *verification.DomainReputationEvidence) *domainReputationDTO {
+	if r == nil {
+		return nil
+	}
+	return &domainReputationDTO{Delivered: r.Delivered, Bounced: r.Bounced, Complained: r.Complained, BounceRate: r.BounceRate}
 }
 
 // toSMTPDTO builds the smtp block, safely handling nil SMTP evidence (short

@@ -120,6 +120,22 @@ func computeScoreComponents(ev classify.Evidence) ScoreComponents {
 	return c
 }
 
+// adjustScoreForReputation lowers the score for a domain with a poor real-world
+// bounce history. It never raises the score and never touches the classification.
+func adjustScoreForReputation(score int, rep DomainReputationEvidence) int {
+	switch {
+	case rep.BounceRate >= 0.5:
+		if score > 20 {
+			score = 20
+		}
+	case rep.BounceRate >= 0.2:
+		if score > 50 {
+			score = 50
+		}
+	}
+	return clampScore(score)
+}
+
 func clampScore(n int) int {
 	if n < 0 {
 		return 0

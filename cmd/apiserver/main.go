@@ -33,6 +33,10 @@ func main() {
 		log.Fatalf("configuration error: %v", err)
 	}
 
+	// Per-domain feedback/reputation store (fed by POST /v1/feedback); its priors
+	// feed back into the deliverability score.
+	feedbackStore := feedback.New()
+
 	// One reusable verifier and one reusable verification service.
 	engine := buildVerifier(cfg)
 	suppressList := suppression.NewFromList(cfg.SuppressEmails)
@@ -41,6 +45,18 @@ func main() {
 		verification.WithSMTPEnabled(cfg.SMTPEnabled),
 		verification.WithDomainHealth(cfg.DomainHealth),
 		verification.WithSuppressionCheck(suppressList.Contains),
+		verification.WithReputation(func(domain string) (verification.DomainReputationEvidence, bool) {
+			rep, ok := feedbackStore.Domain(domain)
+			if !ok {
+				return verification.DomainReputationEvidence{}, false
+			}
+			return verification.DomainReputationEvidence{
+				Delivered:  rep.Delivered,
+				Bounced:    rep.Bounced,
+				Complained: rep.Complained,
+				BounceRate: rep.BounceRate(),
+			}, true
+		}),
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
 
@@ -53,9 +69,6 @@ func main() {
 	if cfg.RateLimitPerMinute > 0 {
 		limiter = ratelimit.New(int(cfg.RateLimitPerMinute))
 	}
-
-	// Per-domain feedback/reputation store (fed by POST /v1/feedback).
-	feedbackStore := feedback.New()
 
 	// Store backend (in-memory or Postgres) shared by the result cache and the
 	// idempotency store.

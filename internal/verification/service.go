@@ -46,6 +46,9 @@ type DomainEvidence struct {
 	// Health is populated only when domain-health checks are enabled and the
 	// domain resolved; nil otherwise.
 	Health *DomainHealthEvidence `json:"health,omitempty"`
+	// Reputation is populated when the feedback loop has outcome history for the
+	// domain; nil otherwise.
+	Reputation *DomainReputationEvidence `json:"reputation,omitempty"`
 }
 
 // DomainHealthEvidence reports free domain-hygiene signals derived from DNS.
@@ -55,6 +58,16 @@ type DomainHealthEvidence struct {
 	SPF   bool `json:"spf"`   // a v=spf1 TXT record is published
 	DMARC bool `json:"dmarc"` // a v=DMARC1 policy is published at _dmarc.<domain>
 	MX    bool `json:"mx"`    // the domain has a usable mail host
+}
+
+// DomainReputationEvidence is the per-domain outcome history from the feedback
+// loop. Present only when history exists. It never changes the classification,
+// but it does adjust the deliverability score (a high bounce rate lowers it).
+type DomainReputationEvidence struct {
+	Delivered  int     `json:"delivered"`
+	Bounced    int     `json:"bounced"`
+	Complained int     `json:"complained"`
+	BounceRate float64 `json:"bounce_rate"`
 }
 
 // AccountEvidence is neutral structured account evidence.
@@ -106,6 +119,7 @@ type Service struct {
 	domainHealth bool
 	lookupTXT    func(name string) ([]string, error)
 	suppressed   func(email string) bool
+	reputation   func(domain string) (DomainReputationEvidence, bool)
 }
 
 // Option configures a Service.
@@ -145,6 +159,13 @@ func WithTXTLookup(fn func(name string) ([]string, error)) Option {
 // the do-not-verify list. Suppressed addresses skip all network checks.
 func WithSuppressionCheck(fn func(email string) bool) Option {
 	return func(s *Service) { s.suppressed = fn }
+}
+
+// WithReputation injects a per-domain reputation lookup (from the feedback loop).
+// When history exists it is attached as evidence and adjusts the deliverability
+// score — closing the accuracy loop.
+func WithReputation(fn func(domain string) (DomainReputationEvidence, bool)) Option {
+	return func(s *Service) { s.reputation = fn }
 }
 
 // NewService builds a Service. By default SMTP checks are enabled, CheckedAt
@@ -227,6 +248,14 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 	// runs only when enabled and the domain actually resolved.
 	if s.domainHealth && ev.DNS == classify.DNSResolved {
 		a.Domain.Health = s.checkDomainHealth(syntax.Domain, ev)
+	}
+	// Feedback loop: attach per-domain reputation and let a poor sending history
+	// pull down the deliverability score (never the classification).
+	if s.reputation != nil {
+		if rep, ok := s.reputation(syntax.Domain); ok {
+			a.Domain.Reputation = &rep
+			a.DeliverabilityScore = adjustScoreForReputation(a.DeliverabilityScore, rep)
+		}
 	}
 	return a
 }
