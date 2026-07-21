@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 
@@ -41,6 +42,7 @@ const (
 	EnvRetryBackoff         = "SYNCORE_VERIFIER_RETRY_BACKOFF"
 	EnvWebhookSigningKey    = "SYNCORE_VERIFIER_WEBHOOK_SIGNING_KEY"
 	EnvRateLimitPerMinute   = "SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE"
+	EnvAPIKeys              = "SYNCORE_VERIFIER_API_KEYS"
 )
 
 // Config is the validated runtime configuration.
@@ -93,6 +95,9 @@ type Config struct {
 	// RateLimitPerMinute limits requests per client (bearer token or IP) per
 	// minute; 0 disables rate limiting.
 	RateLimitPerMinute int64
+	// APIKeys are additional accepted credentials, each an optional "name:key"
+	// (or bare "key"). Any valid API key authenticates like the bearer token.
+	APIKeys []string
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -108,12 +113,13 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		FromEmail: get(lookup, EnvFromEmail, "hello@syncoretech.com"),
 		HelloName: get(lookup, EnvHelloName, "syncoretech.com"),
 		AuthToken: get(lookup, EnvAuthToken, ""),
+		APIKeys:   parseList(get(lookup, EnvAPIKeys, "")),
 	}
 
 	if err := validateBindAddr(cfg.BindAddr); err != nil {
 		return nil, err
 	}
-	if err := validateBindSecurity(cfg.BindAddr, cfg.AuthToken); err != nil {
+	if err := validateBindSecurity(cfg.BindAddr, cfg.AuthToken, len(cfg.APIKeys) > 0); err != nil {
 		return nil, err
 	}
 
@@ -300,8 +306,8 @@ func validateBindAddr(addr string) error {
 // validateBindSecurity refuses to expose the service on a non-loopback address
 // without an auth token set. Binding a public or LAN interface with no bearer
 // token would let anyone who can reach the host drive SMTP probes through it.
-func validateBindSecurity(addr, token string) error {
-	if token != "" {
+func validateBindSecurity(addr, token string, hasAPIKeys bool) error {
+	if token != "" || hasAPIKeys {
 		return nil
 	}
 	host, _, err := net.SplitHostPort(addr)
@@ -326,6 +332,21 @@ func isLoopbackHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+// parseList splits a comma-separated value into trimmed, non-empty entries.
+func parseList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func hasWhitespaceOrControl(s string) bool {

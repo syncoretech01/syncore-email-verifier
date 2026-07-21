@@ -81,6 +81,37 @@ func TestAuth_HealthOpenWithAuthEnabled(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func newAPIKeyServer(t *testing.T, token string, keys []string) http.Handler {
+	t.Helper()
+	return newRouter(newHandlers(handlerOpts{
+		svc:          &stubService{assessment: acceptedAssessment()},
+		batch:        defaultTestBatch,
+		logger:       testLogger,
+		apiKeyHashes: apiKeyHashes(keys),
+	}), token)
+}
+
+func TestAuth_APIKeyAccepted(t *testing.T) {
+	h := newAPIKeyServer(t, "", []string{"crm:key-123", "bare-key-456"})
+	body := `{"email":"person@example.com"}`
+
+	// A named key and a bare key both authenticate.
+	assert.Equal(t, http.StatusOK, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "Bearer key-123").Code)
+	assert.Equal(t, http.StatusOK, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "Bearer bare-key-456").Code)
+
+	// A wrong key and no credential are rejected.
+	assert.Equal(t, http.StatusUnauthorized, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "Bearer nope").Code)
+	assert.Equal(t, http.StatusUnauthorized, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "").Code)
+}
+
+func TestAuth_TokenAndAPIKeysCoexist(t *testing.T) {
+	h := newAPIKeyServer(t, testAuthToken, []string{"k:secret-key"})
+	body := `{"email":"person@example.com"}`
+	assert.Equal(t, http.StatusOK, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "Bearer "+testAuthToken).Code)
+	assert.Equal(t, http.StatusOK, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "Bearer secret-key").Code)
+	assert.Equal(t, http.StatusUnauthorized, doAuth(t, h, http.MethodPost, "/v1/verifications", "application/json", body, "Bearer wrong").Code)
+}
+
 func TestAuth_LegacyGetRequiresToken(t *testing.T) {
 	h := newTestServerWithAuth(t, &stubService{assessment: acceptedAssessment()}, 0, testAuthToken)
 	rec := doAuth(t, h, http.MethodGet, "/v1/person@example.com/verification", "", "", "")

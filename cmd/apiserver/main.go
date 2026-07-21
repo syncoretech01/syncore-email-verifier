@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -94,6 +97,7 @@ func main() {
 		logger:             logger,
 		ready:              readyFn,
 		rateLimiter:        limiter,
+		apiKeyHashes:       apiKeyHashes(cfg.APIKeys),
 	})
 	server := newServer(cfg, handlers)
 
@@ -123,6 +127,28 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown error: %v", err)
 	}
+}
+
+// apiKeyHashes maps each configured API key to its sha256 hex digest -> client
+// name. Entries are "name:key" or a bare "key" (name defaults to "apikey").
+// Keys are never stored in plaintext beyond config load.
+func apiKeyHashes(entries []string) map[string]string {
+	if len(entries) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(entries))
+	for _, e := range entries {
+		name, key := "apikey", e
+		if i := strings.IndexByte(e, ':'); i > 0 {
+			name, key = e[:i], e[i+1:]
+		}
+		if key == "" {
+			continue
+		}
+		sum := sha256.Sum256([]byte(key))
+		m[hex.EncodeToString(sum[:])] = name
+	}
+	return m
 }
 
 // buildStores builds the store backend for the result cache and idempotency

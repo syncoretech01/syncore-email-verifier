@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"log"
 	"net"
 	"net/http"
@@ -44,8 +46,31 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 
 	// Outermost: observe (records + logs, sees the final status). Then panic
 	// recovery, then auth, then rate-limit, then the router.
+	auth := authenticator{token: authToken, keyHashes: h.apiKeyHashes}
 	return observeMiddleware(h.metrics, h.logger,
-		recoverMiddleware(authMiddleware(authToken, rateLimitMiddleware(h.rateLimiter, router))))
+		recoverMiddleware(authMiddleware(auth, rateLimitMiddleware(h.rateLimiter, router))))
+}
+
+// authenticator validates a presented credential against the global bearer token
+// (constant-time) and/or a set of hashed API keys.
+type authenticator struct {
+	token     string
+	keyHashes map[string]string // sha256(key) hex -> client name
+}
+
+func (a authenticator) enabled() bool { return a.token != "" || len(a.keyHashes) > 0 }
+
+func (a authenticator) validate(cred string) bool {
+	if a.token != "" && subtle.ConstantTimeCompare([]byte(cred), []byte(a.token)) == 1 {
+		return true
+	}
+	if len(a.keyHashes) > 0 {
+		sum := sha256.Sum256([]byte(cred))
+		if _, ok := a.keyHashes[hex.EncodeToString(sum[:])]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // rateLimitMiddleware enforces a per-client token-bucket limit, keyed by the
@@ -88,23 +113,21 @@ func isAuthExempt(path string) bool {
 	return path == "/health" || path == "/ready"
 }
 
-// authMiddleware enforces a bearer token on every route except /health. When the
-// token is empty, auth is disabled and the middleware is a pass-through (only
-// reached on a loopback bind — see config.validateBindSecurity). The token
-// comparison is constant-time to avoid leaking it via timing.
-func authMiddleware(token string, next http.Handler) http.Handler {
-	if token == "" {
+// authMiddleware enforces a valid bearer token or API key on every route except
+// the exempt ones. When auth is disabled (no token and no keys) it is a
+// pass-through (only reached on a loopback bind — see config.validateBindSecurity).
+func authMiddleware(auth authenticator, next http.Handler) http.Handler {
+	if !auth.enabled() {
 		return next
 	}
-	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isAuthExempt(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		provided, ok := bearerToken(r.Header.Get("Authorization"))
-		if !ok || subtle.ConstantTimeCompare([]byte(provided), expected) != 1 {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token is required")
+		cred, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok || !auth.validate(cred) {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "a valid bearer token or API key is required")
 			return
 		}
 		next.ServeHTTP(w, r)

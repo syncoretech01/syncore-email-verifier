@@ -63,6 +63,8 @@ type Handlers struct {
 	ready   func(context.Context) error
 	// rateLimiter is nil when rate limiting is disabled.
 	rateLimiter *ratelimit.Limiter
+	// apiKeyHashes maps sha256(key) hex -> client name; additional accepted creds.
+	apiKeyHashes map[string]string
 }
 
 // handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
@@ -78,6 +80,7 @@ type handlerOpts struct {
 	logger             *slog.Logger
 	ready              func(context.Context) error
 	rateLimiter        *ratelimit.Limiter
+	apiKeyHashes       map[string]string
 }
 
 func newHandlers(o handlerOpts) *Handlers {
@@ -110,6 +113,7 @@ func newHandlers(o handlerOpts) *Handlers {
 		logger:             o.logger,
 		ready:              o.ready,
 		rateLimiter:        o.rateLimiter,
+		apiKeyHashes:       o.apiKeyHashes,
 	}
 }
 
