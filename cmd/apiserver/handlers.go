@@ -15,6 +15,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 
 	emailverifier "github.com/AfterShip/email-verifier"
+	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
@@ -50,9 +51,12 @@ type Handlers struct {
 	// idempotency memoizes POST results by Idempotency-Key so a retried CRM call
 	// returns the same result without re-verifying. nil disables the feature.
 	idempotency store.Store[verification.Assessment]
+	// jobs runs asynchronous batch verifications. nil disables the /batches API.
+	jobs               *jobs.Manager
+	asyncBatchMaxItems int
 }
 
-func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig, idempotency store.Store[verification.Assessment]) *Handlers {
+func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig, idempotency store.Store[verification.Assessment], jobsMgr *jobs.Manager, asyncBatchMaxItems int) *Handlers {
 	if batch.maxItems <= 0 {
 		batch.maxItems = 100
 	}
@@ -62,7 +66,17 @@ func newHandlers(svc VerificationService, maxBodyBytes int64, batch batchConfig,
 	if batch.maxBodyBytes <= 0 {
 		batch.maxBodyBytes = 65536
 	}
-	return &Handlers{svc: svc, maxBodyBytes: maxBodyBytes, batch: batch, idempotency: idempotency}
+	if asyncBatchMaxItems <= 0 {
+		asyncBatchMaxItems = 10000
+	}
+	return &Handlers{
+		svc:                svc,
+		maxBodyBytes:       maxBodyBytes,
+		batch:              batch,
+		idempotency:        idempotency,
+		jobs:               jobsMgr,
+		asyncBatchMaxItems: asyncBatchMaxItems,
+	}
 }
 
 // handleHealth is a liveness endpoint. It performs no DNS/SMTP/provider checks.

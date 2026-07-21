@@ -12,6 +12,7 @@ import (
 
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/config"
+	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
 )
@@ -50,11 +51,26 @@ func main() {
 		log.Printf("result cache enabled (store=%s, ttl=%s, unknown_ttl=%s)", cfg.Store, cfg.CacheTTL, cfg.CacheTTLUnknown)
 	}
 
+	// Async batch job manager (in-memory). Uses the same (possibly cached)
+	// verification service and an optional signed-webhook sender.
+	var webhook *jobs.Webhook
+	if cfg.WebhookSigningKey != "" {
+		webhook = jobs.NewWebhook(cfg.WebhookSigningKey, nil)
+	}
+	jobsMgr := jobs.NewManager(vs, jobs.Config{
+		Workers:      int(cfg.Workers),
+		RetryMax:     int(cfg.RetryMaxAttempts),
+		RetryBackoff: cfg.RetryBackoff,
+		Webhook:      webhook,
+	})
+	jobsMgr.Start()
+	defer jobsMgr.Stop()
+
 	handlers := newHandlers(vs, cfg.MaxBodyBytes, batchConfig{
 		maxItems:     int(cfg.BatchMaxItems),
 		concurrency:  int(cfg.BatchConcurrency),
 		maxBodyBytes: cfg.BatchMaxBodyBytes,
-	}, idemStore)
+	}, idemStore, jobsMgr, int(cfg.AsyncBatchMaxItems))
 	server := newServer(cfg, handlers)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

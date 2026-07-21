@@ -22,6 +22,11 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 	router.GET("/v1/:email/verification", h.handleGetVerification)
 	router.POST("/v1/verifications", h.handleVerifications)
 	router.POST("/v1/verifications:batch", h.handleVerificationsBatch)
+	// Async batch API lives under /batches: httprouter's legacy GET
+	// /v1/:email/verification param forbids a static GET sibling under /v1/.
+	router.POST("/batches", h.handleBatchSubmit)
+	router.GET("/batches/:id", h.handleBatchStatus)
+	router.GET("/batches/:id/results", h.handleBatchResults)
 	router.GET("/health", h.handleHealth)
 
 	router.NotFound = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

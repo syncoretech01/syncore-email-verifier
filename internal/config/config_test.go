@@ -39,6 +39,11 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.False(t, cfg.DomainHealth)
 	assert.Equal(t, "memory", cfg.Store)
 	assert.Equal(t, "", cfg.DatabaseURL)
+	assert.Equal(t, int64(4), cfg.Workers)
+	assert.Equal(t, int64(10000), cfg.AsyncBatchMaxItems)
+	assert.Equal(t, int64(0), cfg.RetryMaxAttempts)
+	assert.Equal(t, time.Duration(0), cfg.RetryBackoff)
+	assert.Equal(t, "", cfg.WebhookSigningKey)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -53,16 +58,21 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvDomainSuggest:        "false",
 		EnvMaxBodyBytes:         "8192",
 		// A non-loopback bind requires a token (see validateBindSecurity).
-		EnvAuthToken:         "override-token",
-		EnvCacheTTL:          "10m",
-		EnvCacheTTLUnknown:   "30s",
-		EnvCacheMaxEntries:   "500",
-		EnvBatchMaxItems:     "50",
-		EnvBatchConcurrency:  "5",
-		EnvBatchMaxBodyBytes: "131072",
-		EnvDomainHealth:      "true",
-		EnvStore:             "postgres",
-		EnvDatabaseURL:       "postgres://user:pass@localhost:5432/verifier",
+		EnvAuthToken:          "override-token",
+		EnvCacheTTL:           "10m",
+		EnvCacheTTLUnknown:    "30s",
+		EnvCacheMaxEntries:    "500",
+		EnvBatchMaxItems:      "50",
+		EnvBatchConcurrency:   "5",
+		EnvBatchMaxBodyBytes:  "131072",
+		EnvDomainHealth:       "true",
+		EnvStore:              "postgres",
+		EnvDatabaseURL:        "postgres://user:pass@localhost:5432/verifier",
+		EnvWorkers:            "8",
+		EnvAsyncBatchMaxItems: "2000",
+		EnvRetryMaxAttempts:   "3",
+		EnvRetryBackoff:       "5s",
+		EnvWebhookSigningKey:  "hook-secret",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -85,6 +95,11 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.True(t, cfg.DomainHealth)
 	assert.Equal(t, "postgres", cfg.Store)
 	assert.Equal(t, "postgres://user:pass@localhost:5432/verifier", cfg.DatabaseURL)
+	assert.Equal(t, int64(8), cfg.Workers)
+	assert.Equal(t, int64(2000), cfg.AsyncBatchMaxItems)
+	assert.Equal(t, int64(3), cfg.RetryMaxAttempts)
+	assert.Equal(t, 5*time.Second, cfg.RetryBackoff)
+	assert.Equal(t, "hook-secret", cfg.WebhookSigningKey)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -121,6 +136,10 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"invalid domain health bool", map[string]string{EnvDomainHealth: "maybe"}, EnvDomainHealth},
 		{"invalid store", map[string]string{EnvStore: "mysql"}, EnvStore},
 		{"postgres without database url", map[string]string{EnvStore: "postgres"}, EnvDatabaseURL},
+		{"zero workers", map[string]string{EnvWorkers: "0"}, EnvWorkers},
+		{"negative retry attempts", map[string]string{EnvRetryMaxAttempts: "-1"}, EnvRetryMaxAttempts},
+		{"invalid retry backoff", map[string]string{EnvRetryBackoff: "soon"}, EnvRetryBackoff},
+		{"zero async batch items", map[string]string{EnvAsyncBatchMaxItems: "0"}, EnvAsyncBatchMaxItems},
 	}
 
 	for _, tc := range cases {

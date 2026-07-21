@@ -47,7 +47,7 @@ func newTestServer(t *testing.T, svc VerificationService, maxBody int64) http.Ha
 	if maxBody == 0 {
 		maxBody = 4096
 	}
-	return newRouter(newHandlers(svc, maxBody, defaultTestBatch, nil), "")
+	return newRouter(newHandlers(svc, maxBody, defaultTestBatch, nil, nil, 0), "")
 }
 
 // newTestServerWithAuth builds the real router with bearer auth enabled.
@@ -56,13 +56,13 @@ func newTestServerWithAuth(t *testing.T, svc VerificationService, maxBody int64,
 	if maxBody == 0 {
 		maxBody = 4096
 	}
-	return newRouter(newHandlers(svc, maxBody, defaultTestBatch, nil), token)
+	return newRouter(newHandlers(svc, maxBody, defaultTestBatch, nil, nil, 0), token)
 }
 
 // newTestBatchServer builds the router with a custom batch config for batch tests.
 func newTestBatchServer(t *testing.T, svc VerificationService, batch batchConfig) http.Handler {
 	t.Helper()
-	return newRouter(newHandlers(svc, 4096, batch, nil), "")
+	return newRouter(newHandlers(svc, 4096, batch, nil, nil, 0), "")
 }
 
 func do(t *testing.T, h http.Handler, method, target, contentType, body string) *httptest.ResponseRecorder {

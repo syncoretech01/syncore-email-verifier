@@ -35,6 +35,11 @@ const (
 	EnvDomainHealth         = "SYNCORE_VERIFIER_DOMAIN_HEALTH"
 	EnvStore                = "SYNCORE_VERIFIER_STORE"
 	EnvDatabaseURL          = "SYNCORE_VERIFIER_DATABASE_URL"
+	EnvWorkers              = "SYNCORE_VERIFIER_WORKERS"
+	EnvAsyncBatchMaxItems   = "SYNCORE_VERIFIER_ASYNC_BATCH_MAX_ITEMS"
+	EnvRetryMaxAttempts     = "SYNCORE_VERIFIER_RETRY_MAX_ATTEMPTS"
+	EnvRetryBackoff         = "SYNCORE_VERIFIER_RETRY_BACKOFF"
+	EnvWebhookSigningKey    = "SYNCORE_VERIFIER_WEBHOOK_SIGNING_KEY"
 )
 
 // Config is the validated runtime configuration.
@@ -74,6 +79,16 @@ type Config struct {
 	Store string
 	// DatabaseURL is the Postgres connection string; required when Store=postgres.
 	DatabaseURL string
+	// Workers is the async-batch worker-pool size.
+	Workers int64
+	// AsyncBatchMaxItems caps emails in a POST /batches submission.
+	AsyncBatchMaxItems int64
+	// RetryMaxAttempts is the max retries for a retryable async-batch item (0 = off).
+	RetryMaxAttempts int64
+	// RetryBackoff is the base backoff between async-batch retries (0 = none).
+	RetryBackoff time.Duration
+	// WebhookSigningKey signs async-batch completion webhooks. Empty disables signing.
+	WebhookSigningKey string
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -147,6 +162,19 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	if cfg.Store == "postgres" && cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("%s: required when %s=postgres", EnvDatabaseURL, EnvStore)
 	}
+	if cfg.Workers, err = parsePositiveInt(lookup, EnvWorkers, 4); err != nil {
+		return nil, err
+	}
+	if cfg.AsyncBatchMaxItems, err = parsePositiveInt(lookup, EnvAsyncBatchMaxItems, 10000); err != nil {
+		return nil, err
+	}
+	if cfg.RetryMaxAttempts, err = parseNonNegativeInt(lookup, EnvRetryMaxAttempts, 0); err != nil {
+		return nil, err
+	}
+	if cfg.RetryBackoff, err = parseOptionalDuration(lookup, EnvRetryBackoff, 0); err != nil {
+		return nil, err
+	}
+	cfg.WebhookSigningKey = get(lookup, EnvWebhookSigningKey, "")
 
 	// FROM_EMAIL and HELLO_NAME are only used for SMTP, so they are validated
 	// only when SMTP is enabled; otherwise they must not block startup.
@@ -214,6 +242,22 @@ func parseOptionalDuration(lookup func(string) (string, bool), key string, def t
 		return 0, fmt.Errorf("%s: must not be negative", key)
 	}
 	return d, nil
+}
+
+// parseNonNegativeInt parses an integer that may be zero.
+func parseNonNegativeInt(lookup func(string) (string, bool), key string, def int64) (int64, error) {
+	v, ok := lookup(key)
+	if !ok {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: must be an integer", key)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("%s: must not be negative", key)
+	}
+	return n, nil
 }
 
 func parsePositiveInt(lookup func(string) (string, bool), key string, def int64) (int64, error) {
