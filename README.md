@@ -80,6 +80,7 @@ Configuration comes **only from process environment variables**. `.env.example` 
 | `SYNCORE_VERIFIER_DATABASE_URL` | Postgres connection string | _(empty)_ | URL | When `STORE=postgres` | Required when `STORE=postgres`. |
 | `SYNCORE_VERIFIER_API_KEYS` | Additional accepted credentials (`name:key` or `key`, comma-separated) | _(empty)_ | list | No | Any valid key authenticates like the bearer token; hashed at load. |
 | `SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` | Per-client (token/IP) request limit | `0` | non-negative int | No | `0` disables rate limiting. |
+| `SYNCORE_VERIFIER_DAILY_QUOTA` | Per-client requests per UTC day | `0` | non-negative int | No | `0` disables; in-memory, resets on restart. |
 | `SYNCORE_VERIFIER_WORKERS` | Async-batch worker-pool size | `4` | positive int | No | — |
 | `SYNCORE_VERIFIER_ASYNC_BATCH_MAX_ITEMS` | Max emails per `POST /batches` | `10000` | positive int | No | — |
 | `SYNCORE_VERIFIER_RETRY_MAX_ATTEMPTS` | Async-batch retries for retryable items | `0` | non-negative int | No | `0` disables retries. |
@@ -259,7 +260,7 @@ Items run through a **bounded worker pool** (`SYNCORE_VERIFIER_BATCH_CONCURRENCY
 
 All of the following are additive and config-flagged — unset variables leave behavior unchanged. Every route except `/health` and `/ready` requires auth when a token or API key is configured.
 
-**Authentication.** A global bearer token (`SYNCORE_VERIFIER_AUTH_TOKEN`) and/or multiple **API keys** (`SYNCORE_VERIFIER_API_KEYS`, hashed at load). Optional per-client **rate limiting** (`SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` → `429`).
+**Authentication.** A global bearer token (`SYNCORE_VERIFIER_AUTH_TOKEN`) and/or multiple **API keys** (`SYNCORE_VERIFIER_API_KEYS`, hashed at load). Optional per-client **rate limiting** (`SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` → `429`) and a per-client **daily quota** (`SYNCORE_VERIFIER_DAILY_QUOTA` → `429 quota_exceeded`).
 
 **Async batch** (in-memory jobs; `WORKERS`, `ASYNC_BATCH_MAX_ITEMS`, `RETRY_*`, `WEBHOOK_SIGNING_KEY`):
 - `POST /batches` — `{ "emails": [...], "callback_url"?, "meta"? }` → `202 { "batch_id", "state", "total" }`.
@@ -269,7 +270,7 @@ All of the following are additive and config-flagged — unset variables leave b
 
 **Persistence** (`SYNCORE_VERIFIER_STORE=postgres` + `DATABASE_URL`): the result cache and idempotency store are backed by Postgres (jsonb + TTL). `Idempotency-Key` on `POST /v1/verifications` returns the stored result without re-verifying.
 
-**Feedback loop** (`SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY`): `POST /v1/feedback` ingests a signed `{ "email", "type" }` outcome (`delivered`/`bounced`/`complained`/`engaged`) into per-domain reputation priors. Body must carry a valid `X-Syncore-Signature`.
+**Feedback loop** (`SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY`): `POST /v1/feedback` ingests a signed `{ "email", "type" }` outcome (`delivered`/`bounced`/`complained`/`engaged`) into per-domain reputation priors (body must carry a valid `X-Syncore-Signature`). **The loop is closed:** those priors surface as `domain.reputation` on subsequent verifications and pull down `deliverability_score` for a domain with a poor real-world bounce history (never the classification).
 
 **Compliance.** `POST /admin/erasure` `{ "email" }` removes an address's cached data (right-to-erasure). Verifications and erasures emit a structured audit event carrying only a **SHA-256 of the email** — never plaintext.
 

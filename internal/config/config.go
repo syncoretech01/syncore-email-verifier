@@ -45,6 +45,7 @@ const (
 	EnvAPIKeys              = "SYNCORE_VERIFIER_API_KEYS"
 	EnvSuppressEmails       = "SYNCORE_VERIFIER_SUPPRESS_EMAILS"
 	EnvFeedbackSigningKey   = "SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY"
+	EnvDailyQuota           = "SYNCORE_VERIFIER_DAILY_QUOTA"
 )
 
 // Config is the validated runtime configuration.
@@ -106,6 +107,8 @@ type Config struct {
 	// FeedbackSigningKey enables the HMAC-signed feedback ingestion endpoint.
 	// Empty disables POST /v1/feedback.
 	FeedbackSigningKey string
+	// DailyQuota caps requests per client per UTC day; 0 disables it.
+	DailyQuota int64
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -198,6 +201,9 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	cfg.SuppressEmails = parseList(get(lookup, EnvSuppressEmails, ""))
 	cfg.FeedbackSigningKey = get(lookup, EnvFeedbackSigningKey, "")
+	if cfg.DailyQuota, err = parseNonNegativeInt(lookup, EnvDailyQuota, 0); err != nil {
+		return nil, err
+	}
 
 	// FROM_EMAIL and HELLO_NAME are only used for SMTP, so they are validated
 	// only when SMTP is enabled; otherwise they must not block startup.

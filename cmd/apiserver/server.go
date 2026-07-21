@@ -13,6 +13,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 
 	"github.com/AfterShip/email-verifier/internal/config"
+	"github.com/AfterShip/email-verifier/internal/quota"
 	"github.com/AfterShip/email-verifier/internal/ratelimit"
 )
 
@@ -50,7 +51,28 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 	// recovery, then auth, then rate-limit, then the router.
 	auth := authenticator{token: authToken, keyHashes: h.apiKeyHashes}
 	return observeMiddleware(h.metrics, h.logger,
-		recoverMiddleware(authMiddleware(auth, rateLimitMiddleware(h.rateLimiter, router))))
+		recoverMiddleware(authMiddleware(auth,
+			rateLimitMiddleware(h.rateLimiter,
+				quotaMiddleware(h.quota, router)))))
+}
+
+// quotaMiddleware enforces a per-client daily request cap (keyed like the rate
+// limiter). Over quota -> 429. /health and /ready are exempt. Nil is a pass-through.
+func quotaMiddleware(q *quota.Quota, next http.Handler) http.Handler {
+	if q == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAuthExempt(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !q.Allow(clientKey(r)) {
+			writeError(w, http.StatusTooManyRequests, "quota_exceeded", "daily quota exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // authenticator validates a presented credential against the global bearer token

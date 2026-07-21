@@ -19,6 +19,7 @@ import (
 	"github.com/AfterShip/email-verifier/internal/feedback"
 	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/metrics"
+	"github.com/AfterShip/email-verifier/internal/quota"
 	"github.com/AfterShip/email-verifier/internal/ratelimit"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/verification"
@@ -64,6 +65,8 @@ type Handlers struct {
 	ready   func(context.Context) error
 	// rateLimiter is nil when rate limiting is disabled.
 	rateLimiter *ratelimit.Limiter
+	// quota is nil when the daily quota is disabled.
+	quota *quota.Quota
 	// apiKeyHashes maps sha256(key) hex -> client name; additional accepted creds.
 	apiKeyHashes map[string]string
 	// erase removes an address's cached data (right-to-erasure). nil disables it.
@@ -87,6 +90,7 @@ type handlerOpts struct {
 	logger             *slog.Logger
 	ready              func(context.Context) error
 	rateLimiter        *ratelimit.Limiter
+	quota              *quota.Quota
 	apiKeyHashes       map[string]string
 	erase              func(ctx context.Context, email string) error
 	feedbackStore      *feedback.Store
@@ -123,6 +127,7 @@ func newHandlers(o handlerOpts) *Handlers {
 		logger:             o.logger,
 		ready:              o.ready,
 		rateLimiter:        o.rateLimiter,
+		quota:              o.quota,
 		apiKeyHashes:       o.apiKeyHashes,
 		erase:              o.erase,
 		feedbackStore:      o.feedbackStore,

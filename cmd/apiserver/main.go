@@ -19,6 +19,7 @@ import (
 	"github.com/AfterShip/email-verifier/internal/feedback"
 	"github.com/AfterShip/email-verifier/internal/jobs"
 	"github.com/AfterShip/email-verifier/internal/metrics"
+	"github.com/AfterShip/email-verifier/internal/quota"
 	"github.com/AfterShip/email-verifier/internal/ratelimit"
 	"github.com/AfterShip/email-verifier/internal/store"
 	"github.com/AfterShip/email-verifier/internal/suppression"
@@ -64,10 +65,14 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	registry := metrics.New()
 
-	// Optional per-client rate limiter.
+	// Optional per-client rate limiter and daily quota.
 	var limiter *ratelimit.Limiter
 	if cfg.RateLimitPerMinute > 0 {
 		limiter = ratelimit.New(int(cfg.RateLimitPerMinute))
+	}
+	var dailyQuota *quota.Quota
+	if cfg.DailyQuota > 0 {
+		dailyQuota = quota.New(int(cfg.DailyQuota))
 	}
 
 	// Store backend (in-memory or Postgres) shared by the result cache and the
@@ -117,6 +122,7 @@ func main() {
 		logger:             logger,
 		ready:              readyFn,
 		rateLimiter:        limiter,
+		quota:              dailyQuota,
 		apiKeyHashes:       apiKeyHashes(cfg.APIKeys),
 		erase: func(ctx context.Context, email string) error {
 			return cacheStore.Delete(ctx, strings.ToLower(strings.TrimSpace(email)))
