@@ -33,6 +33,8 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 	router.GET("/batches/:id", h.handleBatchStatus)
 	router.GET("/batches/:id/results", h.handleBatchResults)
 	router.POST("/v1/feedback", h.handleFeedback)
+	router.POST("/v1/feedback/ses", h.handleFeedbackSES)
+	router.POST("/v1/feedback/smartlead", h.handleFeedbackSmartlead)
 	router.POST("/admin/erasure", h.handleErasure)
 	router.GET("/health", h.handleHealth)
 	router.GET("/ready", h.handleReady)

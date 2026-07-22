@@ -2,6 +2,13 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Feedback provider adapters (Phase 7)
+
+- **`POST /v1/feedback/ses`** — ingests raw Amazon SES events delivered over SNS (permanent bounce → `bounced`, complaint → `complained`, delivery → `delivered`, open/click → `engaged`; transient bounces ignored) and handles the SNS `SubscriptionConfirmation` handshake. Accepts SNS's `text/plain` content type.
+- **`POST /v1/feedback/smartlead`** — ingests raw Smartlead webhook events (`EMAIL_BOUNCE` → `bounced`, `EMAIL_REPLY`/`OPEN`/`CLICK` → `engaged`, `EMAIL_SENT` → `delivered`).
+- Both gated by a new shared secret `SYNCORE_VERIFIER_FEEDBACK_ADAPTER_TOKEN` (via `X-Syncore-Token` header or `?token=` query, constant-time compared); empty disables them.
+- Normalization is done by pure, deterministic parsers (`internal/feedback`), so the CRM/ESPs can point their webhooks directly at the verifier instead of running a re-signing forwarder. Additive and config-flagged; no new paid dependency.
+
 ## Enterprise phases — persistence, async batch, observability, rate limiting
 
 Builds the enterprise capabilities from the roadmap that require no external infrastructure. All additive and config-flagged.

@@ -45,6 +45,7 @@ const (
 	EnvAPIKeys              = "SYNCORE_VERIFIER_API_KEYS"
 	EnvSuppressEmails       = "SYNCORE_VERIFIER_SUPPRESS_EMAILS"
 	EnvFeedbackSigningKey   = "SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY"
+	EnvFeedbackAdapterToken = "SYNCORE_VERIFIER_FEEDBACK_ADAPTER_TOKEN"
 	EnvDailyQuota           = "SYNCORE_VERIFIER_DAILY_QUOTA"
 )
 
@@ -107,6 +108,10 @@ type Config struct {
 	// FeedbackSigningKey enables the HMAC-signed feedback ingestion endpoint.
 	// Empty disables POST /v1/feedback.
 	FeedbackSigningKey string
+	// FeedbackAdapterToken is a shared secret gating the provider-specific
+	// ingestion adapters (POST /v1/feedback/ses and /v1/feedback/smartlead).
+	// Empty disables those endpoints.
+	FeedbackAdapterToken string
 	// DailyQuota caps requests per client per UTC day; 0 disables it.
 	DailyQuota int64
 }
@@ -201,6 +206,7 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 	}
 	cfg.SuppressEmails = parseList(get(lookup, EnvSuppressEmails, ""))
 	cfg.FeedbackSigningKey = get(lookup, EnvFeedbackSigningKey, "")
+	cfg.FeedbackAdapterToken = get(lookup, EnvFeedbackAdapterToken, "")
 	if cfg.DailyQuota, err = parseNonNegativeInt(lookup, EnvDailyQuota, 0); err != nil {
 		return nil, err
 	}

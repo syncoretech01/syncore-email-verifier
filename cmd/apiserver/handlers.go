@@ -75,26 +75,31 @@ type Handlers struct {
 	// endpoint. Both empty/nil disables POST /v1/feedback.
 	feedbackStore *feedback.Store
 	feedbackKey   []byte
+	// feedbackAdapterToken is a shared secret gating the provider-specific
+	// ingestion adapters (POST /v1/feedback/ses and /v1/feedback/smartlead).
+	// Empty disables those endpoints.
+	feedbackAdapterToken []byte
 }
 
 // handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
 // their zero value.
 type handlerOpts struct {
-	svc                VerificationService
-	maxBodyBytes       int64
-	batch              batchConfig
-	idempotency        store.Store[verification.Assessment]
-	jobs               *jobs.Manager
-	asyncBatchMaxItems int
-	metrics            *metrics.Registry
-	logger             *slog.Logger
-	ready              func(context.Context) error
-	rateLimiter        *ratelimit.Limiter
-	quota              *quota.Quota
-	apiKeyHashes       map[string]string
-	erase              func(ctx context.Context, email string) error
-	feedbackStore      *feedback.Store
-	feedbackKey        []byte
+	svc                  VerificationService
+	maxBodyBytes         int64
+	batch                batchConfig
+	idempotency          store.Store[verification.Assessment]
+	jobs                 *jobs.Manager
+	asyncBatchMaxItems   int
+	metrics              *metrics.Registry
+	logger               *slog.Logger
+	ready                func(context.Context) error
+	rateLimiter          *ratelimit.Limiter
+	quota                *quota.Quota
+	apiKeyHashes         map[string]string
+	erase                func(ctx context.Context, email string) error
+	feedbackStore        *feedback.Store
+	feedbackKey          []byte
+	feedbackAdapterToken []byte
 }
 
 func newHandlers(o handlerOpts) *Handlers {
@@ -117,21 +122,22 @@ func newHandlers(o handlerOpts) *Handlers {
 		o.logger = slog.Default()
 	}
 	return &Handlers{
-		svc:                o.svc,
-		maxBodyBytes:       o.maxBodyBytes,
-		batch:              o.batch,
-		idempotency:        o.idempotency,
-		jobs:               o.jobs,
-		asyncBatchMaxItems: o.asyncBatchMaxItems,
-		metrics:            o.metrics,
-		logger:             o.logger,
-		ready:              o.ready,
-		rateLimiter:        o.rateLimiter,
-		quota:              o.quota,
-		apiKeyHashes:       o.apiKeyHashes,
-		erase:              o.erase,
-		feedbackStore:      o.feedbackStore,
-		feedbackKey:        o.feedbackKey,
+		svc:                  o.svc,
+		maxBodyBytes:         o.maxBodyBytes,
+		batch:                o.batch,
+		idempotency:          o.idempotency,
+		jobs:                 o.jobs,
+		asyncBatchMaxItems:   o.asyncBatchMaxItems,
+		metrics:              o.metrics,
+		logger:               o.logger,
+		ready:                o.ready,
+		rateLimiter:          o.rateLimiter,
+		quota:                o.quota,
+		apiKeyHashes:         o.apiKeyHashes,
+		erase:                o.erase,
+		feedbackStore:        o.feedbackStore,
+		feedbackKey:          o.feedbackKey,
+		feedbackAdapterToken: o.feedbackAdapterToken,
 	}
 }
 

@@ -88,6 +88,7 @@ Configuration comes **only from process environment variables**. `.env.example` 
 | `SYNCORE_VERIFIER_WEBHOOK_SIGNING_KEY` | HMAC key for async-batch completion webhooks | _(empty)_ | string | No | Empty = unsigned. |
 | `SYNCORE_VERIFIER_SUPPRESS_EMAILS` | Do-not-verify list (comma-separated) | _(empty)_ | list | No | Suppressed addresses skip all network checks. |
 | `SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY` | HMAC key enabling `POST /v1/feedback` | _(empty)_ | string | No | Empty disables feedback ingestion. |
+| `SYNCORE_VERIFIER_FEEDBACK_ADAPTER_TOKEN` | Shared secret enabling the provider adapters `POST /v1/feedback/ses` and `/v1/feedback/smartlead` | _(empty)_ | string | No | Empty disables the adapters. Sent via `X-Syncore-Token` header or `?token=` query. |
 
 `FROM_EMAIL` and `HELLO_NAME` are **validated only when `SMTP_ENABLED=true`**. When SMTP is disabled they are unused and will not block startup even if malformed.
 
@@ -271,6 +272,22 @@ All of the following are additive and config-flagged — unset variables leave b
 **Persistence** (`SYNCORE_VERIFIER_STORE=postgres` + `DATABASE_URL`): the result cache and idempotency store are backed by Postgres (jsonb + TTL). `Idempotency-Key` on `POST /v1/verifications` returns the stored result without re-verifying.
 
 **Feedback loop** (`SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY`): `POST /v1/feedback` ingests a signed `{ "email", "type" }` outcome (`delivered`/`bounced`/`complained`/`engaged`) into per-domain reputation priors (body must carry a valid `X-Syncore-Signature`). **The loop is closed:** those priors surface as `domain.reputation` on subsequent verifications and pull down `deliverability_score` for a domain with a poor real-world bounce history (never the classification).
+
+**Provider adapters** (`SYNCORE_VERIFIER_FEEDBACK_ADAPTER_TOKEN`): instead of running a forwarder that re-signs each event, point your ESPs straight at:
+
+- **`POST /v1/feedback/ses`** — accepts **raw Amazon SES events delivered over SNS** (and SNS `SubscriptionConfirmation` handshakes). Permanent bounces → `bounced`, complaints → `complained`, deliveries → `delivered`, opens/clicks → `engaged` (transient bounces are ignored). SNS delivers with `Content-Type: text/plain`, which this endpoint accepts.
+- **`POST /v1/feedback/smartlead`** — accepts **raw Smartlead webhook events**. `EMAIL_BOUNCE` → `bounced`, `EMAIL_REPLY`/`OPEN`/`CLICK` → `engaged`, `EMAIL_SENT` → `delivered`.
+
+Both are gated by the shared `FEEDBACK_ADAPTER_TOKEN`, sent in the `X-Syncore-Token` header **or** a `?token=` query parameter (constant-time compared). The query form exists because SNS HTTPS subscriptions cannot set custom headers — put the token in the subscription URL. On success they return `{ "accepted": true, "recorded": <n> }`.
+
+```bash
+# Smartlead example (Git Bash)
+curl -s -X POST -H 'X-Syncore-Token: <token>' -H 'Content-Type: application/json' \
+  -d '{"event_type":"EMAIL_BOUNCE","to_email":"bad@example.com"}' \
+  http://127.0.0.1:8080/v1/feedback/smartlead
+```
+
+> Auth note: the adapters use the shared token as the gate. Full Amazon SNS message-signature verification (fetching the signing certificate chain) is a documented future hardening — until then, keep the endpoint private and rely on the token.
 
 **Compliance.** `POST /admin/erasure` `{ "email" }` removes an address's cached data (right-to-erasure). Verifications and erasures emit a structured audit event carrying only a **SHA-256 of the email** — never plaintext.
 
