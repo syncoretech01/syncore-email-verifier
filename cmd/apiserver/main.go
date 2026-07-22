@@ -127,8 +127,9 @@ func main() {
 		erase: func(ctx context.Context, email string) error {
 			return cacheStore.Delete(ctx, strings.ToLower(strings.TrimSpace(email)))
 		},
-		feedbackStore: feedbackStore,
-		feedbackKey:   []byte(cfg.FeedbackSigningKey),
+		feedbackStore:        feedbackStore,
+		feedbackKey:          []byte(cfg.FeedbackSigningKey),
+		feedbackAdapterToken: []byte(cfg.FeedbackAdapterToken),
 	})
 	server := newServer(cfg, handlers)
 
