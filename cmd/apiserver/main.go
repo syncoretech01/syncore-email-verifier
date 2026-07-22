@@ -60,6 +60,15 @@ func main() {
 		}),
 		verification.WithClock(func() time.Time { return time.Now().UTC() }),
 	)
+	if cfg.GravatarCheck {
+		verification.WithGravatarCheck(func(email string) (bool, string) {
+			g, err := engine.CheckGravatar(email)
+			if err != nil || g == nil {
+				return false, ""
+			}
+			return g.HasGravatar, g.GravatarUrl
+		})(svc)
+	}
 
 	// Structured logs + a dependency-free metrics registry.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))

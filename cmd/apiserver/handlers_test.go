@@ -390,3 +390,27 @@ func assertErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantCode 
 	assert.NotEmpty(t, env.Error.Message)
 	return env.Error.Code
 }
+
+func TestPOST_GravatarEvidence(t *testing.T) {
+	// Present when the assessment carries Gravatar evidence.
+	a := simpleAssessment(classify.StatusUnknown, classify.ReasonSMTPInconclusive, nil)
+	a.Account.Gravatar = &verification.GravatarEvidence{HasGravatar: true, URL: "https://gravatar/x"}
+	h := newTestServer(t, &stubService{assessment: a}, 0)
+	rec := do(t, h, http.MethodPost, "/v1/verifications", "application/json", `{"email":"x@y.com"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var dto verificationDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &dto))
+	require.NotNil(t, dto.Account.Gravatar)
+	assert.True(t, dto.Account.Gravatar.HasGravatar)
+	assert.Equal(t, "https://gravatar/x", dto.Account.Gravatar.URL)
+
+	// Omitted from the account object when the check did not run.
+	h2 := newTestServer(t, &stubService{assessment: simpleAssessment(classify.StatusUnknown, classify.ReasonSMTPInconclusive, nil)}, 0)
+	rec2 := do(t, h2, http.MethodPost, "/v1/verifications", "application/json", `{"email":"x@y.com"}`)
+	var m map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &m))
+	var acct map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(m["account"], &acct))
+	_, present := acct["gravatar"]
+	assert.False(t, present, "gravatar omitted when not checked")
+}

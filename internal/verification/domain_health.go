@@ -120,6 +120,23 @@ func computeScoreComponents(ev classify.Evidence) ScoreComponents {
 	return c
 }
 
+// gravatarBonus is the small deliverability-score nudge a public Gravatar
+// profile earns — a weak "this is a real, used address" engagement signal.
+const gravatarBonus = 8
+
+// applyGravatarBonus rewards a public Gravatar profile with a small, capped
+// bonus, but only for uncertain results (unknown/risky). A valid result is
+// already high and an invalid one refuses mail regardless of a public profile,
+// so neither is changed. Never touches the classification.
+func applyGravatarBonus(score int, status classify.Status) int {
+	switch status {
+	case classify.StatusUnknown, classify.StatusRisky:
+		return clampScore(score + gravatarBonus)
+	default:
+		return score
+	}
+}
+
 // adjustScoreForReputation lowers the score for a domain with a poor real-world
 // bounce history. It never raises the score and never touches the classification.
 func adjustScoreForReputation(score int, rep DomainReputationEvidence) int {
