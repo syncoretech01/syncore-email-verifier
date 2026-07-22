@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/julienschmidt/httprouter"
+
+	"github.com/AfterShip/email-verifier/internal/jobs"
 )
 
 // Async batch endpoints live under /batches (not /v1/) because httprouter's
@@ -80,7 +82,11 @@ func (h *Handlers) handleBatchSubmit(w http.ResponseWriter, r *http.Request, _ h
 		writeError(w, http.StatusServiceUnavailable, "not_available", "the service is shutting down")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, asyncBatchSubmitResponse{BatchID: b.ID, State: string(b.State), Total: b.Total})
+	// Report the submit-time state/total from immutable local knowledge. Once
+	// Submit returns, the batch is enqueued and a worker may already be mutating
+	// b.State/b.Total concurrently — reading those live fields here would be a
+	// data race and a flaky response. b.ID is set once and never mutated.
+	writeJSON(w, http.StatusAccepted, asyncBatchSubmitResponse{BatchID: b.ID, State: string(jobs.StateQueued), Total: len(req.Emails)})
 }
 
 // handleBatchStatus returns a batch's progress.
