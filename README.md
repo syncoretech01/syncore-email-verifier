@@ -68,12 +68,51 @@ Configuration comes **only from process environment variables**. `.env.example` 
 | `SYNCORE_VERIFIER_DISPOSABLE_AUTOUPDATE` | Refresh disposable-domain list daily | `false` | boolean | No | Must parse as a boolean. |
 | `SYNCORE_VERIFIER_DOMAIN_SUGGEST` | Suggest a likely-correct domain for typos | `true` | boolean | No | Must parse as a boolean. |
 | `SYNCORE_VERIFIER_MAX_BODY_BYTES` | Maximum accepted `POST` body size (bytes) | `4096` | positive integer | No | Must be a positive integer. |
+| `SYNCORE_VERIFIER_AUTH_TOKEN` | Bearer token required on verification endpoints | _(empty)_ | string | No | When empty, auth is disabled — allowed **only** on a loopback bind. |
+| `SYNCORE_VERIFIER_CACHE_TTL` | Result-cache lifetime for terminal (`valid`/`invalid`) results; `0` disables the cache | `0` | Go duration | No | Must parse as a duration and be `>= 0`. |
+| `SYNCORE_VERIFIER_CACHE_TTL_UNKNOWN` | Result-cache lifetime for retryable (`unknown`) results | `0` → `min(CACHE_TTL, 1m)` | Go duration | No | Must parse as a duration and be `>= 0`; clamped to `CACHE_TTL`. |
+| `SYNCORE_VERIFIER_CACHE_MAX_ENTRIES` | Max in-memory result-cache entries | `10000` | positive integer | No | Must be a positive integer. |
+| `SYNCORE_VERIFIER_BATCH_MAX_ITEMS` | Max emails per batch request | `100` | positive integer | No | Must be a positive integer. |
+| `SYNCORE_VERIFIER_BATCH_CONCURRENCY` | Batch worker-pool size | `10` | positive integer | No | Must be a positive integer. |
+| `SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES` | Max batch request body size (bytes) | `65536` | positive integer | No | Must be a positive integer. |
+| `SYNCORE_VERIFIER_DOMAIN_HEALTH` | Enable free SPF/DMARC/MX domain-health lookups | `false` | boolean | No | Must parse as a boolean. |
+| `SYNCORE_VERIFIER_STORE` | Result-cache / idempotency backend | `memory` | `memory` \| `postgres` | No | Must be `memory` or `postgres`. |
+| `SYNCORE_VERIFIER_DATABASE_URL` | Postgres connection string | _(empty)_ | URL | When `STORE=postgres` | Required when `STORE=postgres`. |
+| `SYNCORE_VERIFIER_API_KEYS` | Additional accepted credentials (`name:key` or `key`, comma-separated) | _(empty)_ | list | No | Any valid key authenticates like the bearer token; hashed at load. |
+| `SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` | Per-client (token/IP) request limit | `0` | non-negative int | No | `0` disables rate limiting. |
+| `SYNCORE_VERIFIER_DAILY_QUOTA` | Per-client requests per UTC day | `0` | non-negative int | No | `0` disables; in-memory, resets on restart. |
+| `SYNCORE_VERIFIER_WORKERS` | Async-batch worker-pool size | `4` | positive int | No | — |
+| `SYNCORE_VERIFIER_ASYNC_BATCH_MAX_ITEMS` | Max emails per `POST /batches` | `10000` | positive int | No | — |
+| `SYNCORE_VERIFIER_RETRY_MAX_ATTEMPTS` | Async-batch retries for retryable items | `0` | non-negative int | No | `0` disables retries. |
+| `SYNCORE_VERIFIER_RETRY_BACKOFF` | Base backoff between async-batch retries | `0s` | Go duration | No | `0` = no wait. |
+| `SYNCORE_VERIFIER_WEBHOOK_SIGNING_KEY` | HMAC key for async-batch completion webhooks | _(empty)_ | string | No | Empty = unsigned. |
+| `SYNCORE_VERIFIER_SUPPRESS_EMAILS` | Do-not-verify list (comma-separated) | _(empty)_ | list | No | Suppressed addresses skip all network checks. |
+| `SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY` | HMAC key enabling `POST /v1/feedback` | _(empty)_ | string | No | Empty disables feedback ingestion. |
 
 `FROM_EMAIL` and `HELLO_NAME` are **validated only when `SMTP_ENABLED=true`**. When SMTP is disabled they are unused and will not block startup even if malformed.
 
+**Safe bind:** startup **fails fast** if `SYNCORE_VERIFIER_BIND_ADDR` is a non-loopback address (e.g. `0.0.0.0`, a LAN IP, or `:port`) while `SYNCORE_VERIFIER_AUTH_TOKEN` is unset — the service is never exposed without authentication. Loopback binds need no token.
+
+For deployment units (systemd/PM2), the co-located-vs-port-25 tradeoff, and the batch timing bound, see [`deploy/`](deploy/README.md).
+
 ## HTTP API
 
-Three endpoints. Every response is JSON.
+Four endpoints. Every response is JSON.
+
+### Authentication
+
+When `SYNCORE_VERIFIER_AUTH_TOKEN` is set, **all verification endpoints** require
+an `Authorization: Bearer <token>` header (constant-time compared); a missing or
+wrong token returns **401** with the standard error envelope. **`GET /health`
+stays open** so probes and load balancers work without a credential. When the
+token is unset, auth is disabled (permitted only on a loopback bind — see
+Configuration).
+
+```bash
+curl.exe -s -X POST -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $env:SYNCORE_VERIFIER_AUTH_TOKEN" \
+  -d "{\"email\":\"person@example.com\"}" http://127.0.0.1:8080/v1/verifications
+```
 
 ### `GET /health`
 
@@ -129,6 +168,7 @@ Structured response:
   "reason_code": "smtp_accepted",
   "retryable": false,
   "confidence": 95,
+  "deliverability_score": 95,
   "checked_at": "2026-07-13T19:05:29Z",
   "source": "smtp",
   "syntax": { "username": "person", "domain": "example.com", "valid": true },
@@ -145,6 +185,40 @@ Structured response:
   "error": null
 }
 ```
+
+Two additive fields accompany the classification:
+
+- **`deliverability_score`** (0–100) — a deterministic, network-free estimate of how likely the address is to **accept mail**, derived from status + evidence. It is distinct from `confidence` (our certainty in the *classification*): an `invalid` result scores `0`, a clean `valid` scores high, and a `disposable` or `catch_all` address scores low even when we are confident. This is a v1 heuristic; per-domain reputation refinement is future work.
+- **`domain.domain_health`** — present only when `SYNCORE_VERIFIER_DOMAIN_HEALTH=true` and the domain resolves. Reports free DNS hygiene signals: `spf` (a `v=spf1` record), `dmarc` (a `v=DMARC1` policy at `_dmarc.<domain>`), and `mx` (a usable mail host). DKIM is intentionally omitted — it is selector-specific and cannot be verified without a signed message. These signals never change the classification.
+
+### `POST /v1/verifications:batch`
+
+Verify a bounded list of emails in one request. Stateless — no persistence, no queue. Results are returned **one per input, in order**; a single bad or faulty item never fails the batch (it comes back as its own classification, e.g. `invalid`/`syntax_invalid`, or `unknown`/`retryable` on an internal fault). An optional `meta` object is echoed back verbatim.
+
+Request body (`emails` bounded by `SYNCORE_VERIFIER_BATCH_MAX_ITEMS`, default 100):
+
+```json
+{ "emails": ["a@example.com", "b@example.com"], "meta": { "batch_id": "abc" } }
+```
+
+```bash
+curl.exe -s -X POST -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $env:SYNCORE_VERIFIER_AUTH_TOKEN" \
+  -d "{\"emails\":[\"a@example.com\",\"b@example.com\"]}" \
+  http://127.0.0.1:8080/v1/verifications:batch
+```
+
+Response:
+
+```json
+{
+  "results": [ { "email": "a@example.com", "status": "valid",  "...": "..." },
+               { "email": "b@example.com", "status": "invalid", "...": "..." } ],
+  "meta": { "batch_id": "abc" }
+}
+```
+
+Items run through a **bounded worker pool** (`SYNCORE_VERIFIER_BATCH_CONCURRENCY`, default 10) so batches never stampede providers. Over-cap, empty, or missing `emails` → **400**; an oversize body (`SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES`) → **413**. Because a full batch can take up to `ceil(max_items / concurrency) × (connect + operation)` timeout, the server `WriteTimeout` is sized to cover it and **the CRM must chunk to `BATCH_MAX_ITEMS`** — the bound is documented in [`deploy/`](deploy/README.md).
 
 ### Classification model
 
@@ -179,6 +253,28 @@ Structured response:
 - **MX evidence** — `has_mx_records`, `mail_host_source` (`mx` / `a` / `aaaa` / `null` / `none`), and `implicit_mx`.
 - **Null MX** — a domain publishing an RFC 7505 Null MX (`.` target) is `invalid` / `null_mx` and is **not** probed further.
 - **Implicit A/AAAA delivery** — when a domain has no MX records but has an A/AAAA record, that host is used as an implicit mail exchanger (`mail_host_source` = `a` or `aaaa`); the absence of an explicit MX record alone is **not** treated as invalid.
+- **`deliverability_score` + `score_components`** — a deterministic 0–100 estimate of how likely the address is to accept mail, decomposed into `syntax` / `domain` / `mailbox` sub-scores. Distinct from `confidence` (certainty in the classification).
+- **`suppressed`** — `true` when the address is on the do-not-verify list (`SYNCORE_VERIFIER_SUPPRESS_EMAILS`); such an address returns `risky` + `suppressed:true` with **no network check performed**.
+
+## Enterprise endpoints & capabilities
+
+All of the following are additive and config-flagged — unset variables leave behavior unchanged. Every route except `/health` and `/ready` requires auth when a token or API key is configured.
+
+**Authentication.** A global bearer token (`SYNCORE_VERIFIER_AUTH_TOKEN`) and/or multiple **API keys** (`SYNCORE_VERIFIER_API_KEYS`, hashed at load). Optional per-client **rate limiting** (`SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` → `429`) and a per-client **daily quota** (`SYNCORE_VERIFIER_DAILY_QUOTA` → `429 quota_exceeded`).
+
+**Async batch** (in-memory jobs; `WORKERS`, `ASYNC_BATCH_MAX_ITEMS`, `RETRY_*`, `WEBHOOK_SIGNING_KEY`):
+- `POST /batches` — `{ "emails": [...], "callback_url"?, "meta"? }` → `202 { "batch_id", "state", "total" }`.
+- `GET /batches/{id}` — progress + per-status counts.
+- `GET /batches/{id}/results?offset=&limit=` — paginated results.
+- Retryable (`unknown`) items are retried up to `RETRY_MAX_ATTEMPTS`; on completion an **HMAC-SHA256-signed** webhook (`X-Syncore-Signature`) is POSTed to `callback_url`.
+
+**Persistence** (`SYNCORE_VERIFIER_STORE=postgres` + `DATABASE_URL`): the result cache and idempotency store are backed by Postgres (jsonb + TTL). `Idempotency-Key` on `POST /v1/verifications` returns the stored result without re-verifying.
+
+**Feedback loop** (`SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY`): `POST /v1/feedback` ingests a signed `{ "email", "type" }` outcome (`delivered`/`bounced`/`complained`/`engaged`) into per-domain reputation priors (body must carry a valid `X-Syncore-Signature`). **The loop is closed:** those priors surface as `domain.reputation` on subsequent verifications and pull down `deliverability_score` for a domain with a poor real-world bounce history (never the classification).
+
+**Compliance.** `POST /admin/erasure` `{ "email" }` removes an address's cached data (right-to-erasure). Verifications and erasures emit a structured audit event carrying only a **SHA-256 of the email** — never plaintext.
+
+**Observability.** `GET /metrics` (Prometheus text; auth-protected) exposes `verifications_total{status}`, `http_requests_total{route,method,code}`, and a request-duration histogram. `GET /ready` reports readiness (pings Postgres when configured). Structured JSON access logs carry a per-request `X-Request-ID` and never log the email.
 
 ## HTTP response behavior
 
@@ -186,6 +282,7 @@ Structured response:
 |---|---|
 | Any completed verification (`valid`/`invalid`/`risky`/`unknown`, incl. invalid syntax, timeouts, Null MX, no mail host) | **200** |
 | Malformed request structure (bad/duplicate JSON, unknown field, missing/empty/over-254-byte/control-character email) | **400** |
+| Missing or invalid bearer token (when `AUTH_TOKEN` is set; `/health` is exempt) | **401** |
 | Unknown route | **404** |
 | Unsupported method on a known route | **405** (with `Allow` header) |
 | Request body larger than `MAX_BODY_BYTES` | **413** |

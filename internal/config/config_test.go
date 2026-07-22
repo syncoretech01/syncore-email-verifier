@@ -29,6 +29,26 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.False(t, cfg.DisposableAutoUpdate)
 	assert.True(t, cfg.DomainSuggest)
 	assert.Equal(t, int64(4096), cfg.MaxBodyBytes)
+	assert.Equal(t, "", cfg.AuthToken)
+	assert.Equal(t, time.Duration(0), cfg.CacheTTL)
+	assert.Equal(t, time.Duration(0), cfg.CacheTTLUnknown)
+	assert.Equal(t, int64(10000), cfg.CacheMaxEntries)
+	assert.Equal(t, int64(100), cfg.BatchMaxItems)
+	assert.Equal(t, int64(10), cfg.BatchConcurrency)
+	assert.Equal(t, int64(65536), cfg.BatchMaxBodyBytes)
+	assert.False(t, cfg.DomainHealth)
+	assert.Equal(t, "memory", cfg.Store)
+	assert.Equal(t, "", cfg.DatabaseURL)
+	assert.Equal(t, int64(4), cfg.Workers)
+	assert.Equal(t, int64(10000), cfg.AsyncBatchMaxItems)
+	assert.Equal(t, int64(0), cfg.RetryMaxAttempts)
+	assert.Equal(t, time.Duration(0), cfg.RetryBackoff)
+	assert.Equal(t, "", cfg.WebhookSigningKey)
+	assert.Equal(t, int64(0), cfg.RateLimitPerMinute)
+	assert.Empty(t, cfg.APIKeys)
+	assert.Empty(t, cfg.SuppressEmails)
+	assert.Equal(t, "", cfg.FeedbackSigningKey)
+	assert.Equal(t, int64(0), cfg.DailyQuota)
 }
 
 func TestLoad_EachOverride(t *testing.T) {
@@ -42,6 +62,27 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvDisposableAutoUpdate: "true",
 		EnvDomainSuggest:        "false",
 		EnvMaxBodyBytes:         "8192",
+		// A non-loopback bind requires a token (see validateBindSecurity).
+		EnvAuthToken:          "override-token",
+		EnvCacheTTL:           "10m",
+		EnvCacheTTLUnknown:    "30s",
+		EnvCacheMaxEntries:    "500",
+		EnvBatchMaxItems:      "50",
+		EnvBatchConcurrency:   "5",
+		EnvBatchMaxBodyBytes:  "131072",
+		EnvDomainHealth:       "true",
+		EnvStore:              "postgres",
+		EnvDatabaseURL:        "postgres://user:pass@localhost:5432/verifier",
+		EnvWorkers:            "8",
+		EnvAsyncBatchMaxItems: "2000",
+		EnvRetryMaxAttempts:   "3",
+		EnvRetryBackoff:       "5s",
+		EnvWebhookSigningKey:  "hook-secret",
+		EnvRateLimitPerMinute: "120",
+		EnvAPIKeys:            "crm:key-1, partner:key-2 ,bare-key",
+		EnvSuppressEmails:     "blocked@x.com,spammer@y.com",
+		EnvFeedbackSigningKey: "feedback-secret",
+		EnvDailyQuota:         "5000",
 	}
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
@@ -54,6 +95,37 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.True(t, cfg.DisposableAutoUpdate)
 	assert.False(t, cfg.DomainSuggest)
 	assert.Equal(t, int64(8192), cfg.MaxBodyBytes)
+	assert.Equal(t, "override-token", cfg.AuthToken)
+	assert.Equal(t, 10*time.Minute, cfg.CacheTTL)
+	assert.Equal(t, 30*time.Second, cfg.CacheTTLUnknown)
+	assert.Equal(t, int64(500), cfg.CacheMaxEntries)
+	assert.Equal(t, int64(50), cfg.BatchMaxItems)
+	assert.Equal(t, int64(5), cfg.BatchConcurrency)
+	assert.Equal(t, int64(131072), cfg.BatchMaxBodyBytes)
+	assert.True(t, cfg.DomainHealth)
+	assert.Equal(t, "postgres", cfg.Store)
+	assert.Equal(t, "postgres://user:pass@localhost:5432/verifier", cfg.DatabaseURL)
+	assert.Equal(t, int64(8), cfg.Workers)
+	assert.Equal(t, int64(2000), cfg.AsyncBatchMaxItems)
+	assert.Equal(t, int64(3), cfg.RetryMaxAttempts)
+	assert.Equal(t, 5*time.Second, cfg.RetryBackoff)
+	assert.Equal(t, "hook-secret", cfg.WebhookSigningKey)
+	assert.Equal(t, int64(120), cfg.RateLimitPerMinute)
+	assert.Equal(t, []string{"crm:key-1", "partner:key-2", "bare-key"}, cfg.APIKeys)
+	assert.Equal(t, []string{"blocked@x.com", "spammer@y.com"}, cfg.SuppressEmails)
+	assert.Equal(t, "feedback-secret", cfg.FeedbackSigningKey)
+	assert.Equal(t, int64(5000), cfg.DailyQuota)
+}
+
+func TestLoad_NonLoopbackBindWithAPIKeysOK(t *testing.T) {
+	// API keys satisfy the safe-bind requirement even without a bearer token.
+	cfg, err := loadFrom(lookupFrom(map[string]string{
+		EnvBindAddr: "0.0.0.0:9000",
+		EnvAPIKeys:  "crm:key-1",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.AuthToken)
+	assert.Len(t, cfg.APIKeys, 1)
 }
 
 func TestLoad_ValidationErrors(t *testing.T) {
@@ -77,6 +149,23 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"smtp enabled empty hello name", map[string]string{EnvSMTPEnabled: "true", EnvHelloName: ""}, EnvHelloName},
 		{"smtp enabled whitespace hello name", map[string]string{EnvSMTPEnabled: "true", EnvHelloName: "bad host"}, EnvHelloName},
 		{"smtp enabled control hello name", map[string]string{EnvSMTPEnabled: "true", EnvHelloName: "bad\x01host"}, EnvHelloName},
+		{"non-loopback bind without token", map[string]string{EnvBindAddr: "0.0.0.0:9000"}, EnvAuthToken},
+		{"all-interfaces bind without token", map[string]string{EnvBindAddr: ":9000"}, EnvAuthToken},
+		{"lan bind without token", map[string]string{EnvBindAddr: "192.168.1.10:9000"}, EnvAuthToken},
+		{"negative cache ttl", map[string]string{EnvCacheTTL: "-1m"}, EnvCacheTTL},
+		{"invalid cache ttl", map[string]string{EnvCacheTTL: "tenminutes"}, EnvCacheTTL},
+		{"invalid unknown cache ttl", map[string]string{EnvCacheTTLUnknown: "nope"}, EnvCacheTTLUnknown},
+		{"zero cache max entries", map[string]string{EnvCacheMaxEntries: "0"}, EnvCacheMaxEntries},
+		{"zero batch max items", map[string]string{EnvBatchMaxItems: "0"}, EnvBatchMaxItems},
+		{"negative batch concurrency", map[string]string{EnvBatchConcurrency: "-1"}, EnvBatchConcurrency},
+		{"non-integer batch body", map[string]string{EnvBatchMaxBodyBytes: "big"}, EnvBatchMaxBodyBytes},
+		{"invalid domain health bool", map[string]string{EnvDomainHealth: "maybe"}, EnvDomainHealth},
+		{"invalid store", map[string]string{EnvStore: "mysql"}, EnvStore},
+		{"postgres without database url", map[string]string{EnvStore: "postgres"}, EnvDatabaseURL},
+		{"zero workers", map[string]string{EnvWorkers: "0"}, EnvWorkers},
+		{"negative retry attempts", map[string]string{EnvRetryMaxAttempts: "-1"}, EnvRetryMaxAttempts},
+		{"invalid retry backoff", map[string]string{EnvRetryBackoff: "soon"}, EnvRetryBackoff},
+		{"zero async batch items", map[string]string{EnvAsyncBatchMaxItems: "0"}, EnvAsyncBatchMaxItems},
 	}
 
 	for _, tc := range cases {
@@ -106,6 +195,34 @@ func TestLoad_SMTPDisabledEmptyHelloNameOK(t *testing.T) {
 	cfg, err := loadFrom(lookupFrom(env))
 	require.NoError(t, err)
 	assert.False(t, cfg.SMTPEnabled)
+}
+
+func TestLoad_NonLoopbackBindWithTokenOK(t *testing.T) {
+	// A non-loopback bind is allowed once an auth token is set.
+	for _, addr := range []string{"0.0.0.0:9000", ":9000", "192.168.1.10:9000"} {
+		cfg, err := loadFrom(lookupFrom(map[string]string{
+			EnvBindAddr:  addr,
+			EnvAuthToken: "a-token",
+		}))
+		require.NoErrorf(t, err, "addr %q with token should load", addr)
+		assert.Equal(t, addr, cfg.BindAddr)
+	}
+}
+
+func TestLoad_CacheTTLZeroDisables(t *testing.T) {
+	// An explicit "0s" is accepted and means the cache stays disabled.
+	cfg, err := loadFrom(lookupFrom(map[string]string{EnvCacheTTL: "0s"}))
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), cfg.CacheTTL)
+}
+
+func TestLoad_LoopbackBindNeedsNoToken(t *testing.T) {
+	// Loopback binds are safe without a token.
+	for _, addr := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		cfg, err := loadFrom(lookupFrom(map[string]string{EnvBindAddr: addr}))
+		require.NoErrorf(t, err, "loopback addr %q should load tokenless", addr)
+		assert.Equal(t, "", cfg.AuthToken)
+	}
 }
 
 // TestLoad_NoLeakageBetweenTests confirms the map-based lookup is fully isolated:

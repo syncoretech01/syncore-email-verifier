@@ -2,6 +2,61 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Enterprise phases — persistence, async batch, observability, rate limiting
+
+Builds the enterprise capabilities from the roadmap that require no external infrastructure. All additive and config-flagged.
+
+**Persistence (Phase 2)**
+- New `internal/store` durable **Postgres backend** (`pgx`) behind the same generic `Store[V]` interface as the in-memory cache — jsonb + per-row TTL, idempotent migration, upsert. Select with `SYNCORE_VERIFIER_STORE=postgres` + `SYNCORE_VERIFIER_DATABASE_URL`. Verified against a real Postgres via a `//go:build live` integration test (excluded from the default suite).
+- **Idempotency keys**: `Idempotency-Key` on `POST /v1/verifications` returns the stored result without re-verifying.
+
+**Async batch (Phase 3)**
+- New `internal/jobs` async batch manager: bounded worker pool, per-item **retry** of retryable results (`RETRY_MAX_ATTEMPTS`/`RETRY_BACKOFF`), and **HMAC-SHA256-signed completion webhooks** (`WEBHOOK_SIGNING_KEY`), with graceful drain.
+- Endpoints (under `/batches`): `POST /batches`, `GET /batches/{id}`, `GET /batches/{id}/results?offset=&limit=`. Bounded by `ASYNC_BATCH_MAX_ITEMS`; worker pool sized by `WORKERS`.
+
+**Observability (Phase 9)**
+- New `internal/metrics`: a dependency-free **Prometheus text** registry. `GET /metrics` (auth-protected) exposes `verifications_total{status}`, `http_requests_total{route,method,code}`, and a request-duration histogram.
+- **Structured JSON access logs** (`log/slog`) with a per-request `X-Request-ID`; route labels are normalized so the email in the legacy GET path is never logged.
+- `GET /ready` readiness (pings Postgres when configured); `/health` and `/ready` stay open under auth.
+
+**Rate limiting + API keys (Phase 8)**
+- New `internal/ratelimit` token-bucket limiter. `SYNCORE_VERIFIER_RATE_LIMIT_PER_MINUTE` enforces a per-client (bearer token or IP) limit; over-limit → `429`.
+- **API keys** (`SYNCORE_VERIFIER_API_KEYS`): multiple `name:key` credentials, hashed at load; any valid key authenticates like the bearer token and satisfies the safe-bind guard. (Quotas/credits deferred — they want durable atomic counters.)
+
+**Compliance (Phase 10)**
+- **Suppression list** (`SYNCORE_VERIFIER_SUPPRESS_EMAILS`): a do-not-verify address short-circuits before any network check and returns `suppressed:true`.
+- **Right-to-erasure**: `POST /admin/erasure` removes an address's cached data (Store gained `Delete`, memory + Postgres).
+- **Audit log**: verifications and erasures emit structured events carrying only a SHA-256 of the email — never plaintext PII.
+
+**Feedback loop (Phase 7)**
+- New `internal/feedback`: per-domain reputation priors (delivered/bounced/complained/engaged + bounce rate) from real sending outcomes, with a deterministic synthetic replay test. `POST /v1/feedback` ingests HMAC-signed events (`SYNCORE_VERIFIER_FEEDBACK_SIGNING_KEY`).
+
+**Deliverability score components (Phase 6)**
+- Additive `score_components` (`syntax`/`domain`/`mailbox`, 0–100) decomposing `deliverability_score`. Deterministic, network-free.
+
+## Growth OS foundation — auth, cache, batch, domain health
+
+Adds the net-new surface the CRM needs to call this service as Layer 1 of the verification waterfall. Additive and config-flagged: with no new variables set, behavior is unchanged.
+
+**Authentication & safe bind**
+- Optional `SYNCORE_VERIFIER_AUTH_TOKEN`. When set, all verification endpoints require `Authorization: Bearer <token>` (constant-time compare); `/health` stays open; missing/invalid → **401**.
+- Startup **fails fast** if bound to a non-loopback address with no token set, so the service is never exposed unauthenticated.
+
+**Result cache (persistence seam)**
+- New `internal/store` package: a generic, concurrency-safe TTL `Store[V]` with a bounded in-memory backend (a durable backend can implement the same interface later).
+- Optional result cache (`SYNCORE_VERIFIER_CACHE_TTL`, off by default): caches terminal results for the full TTL and retryable `unknown` results for a shorter TTL, sparing repeat DNS/SMTP work. Classification is never altered.
+
+**Batch endpoint**
+- New **`POST /v1/verifications:batch`** — stateless, bounded (`SYNCORE_VERIFIER_BATCH_MAX_ITEMS`), ordered results, per-item fault isolation (a bad item never fails the batch), processed through a bounded worker pool (`SYNCORE_VERIFIER_BATCH_CONCURRENCY`).
+- Server `WriteTimeout` is now batch-aware and covers the documented worst-case batch duration; the bound is stated in `deploy/`.
+
+**Deliverability score & domain health**
+- Additive **`deliverability_score`** (0–100): a deterministic, network-free estimate of how likely an address is to accept mail, distinct from `confidence`.
+- Optional **`domain_health`** (`SYNCORE_VERIFIER_DOMAIN_HEALTH`, off by default): free SPF/DMARC/MX DNS signals folded into the domain evidence; the classifier stays pure.
+
+**Deployment**
+- New `deploy/` unit files (systemd + PM2), a vault-populated env template, and a deployment guide documenting the co-located-vs-port-25 tradeoff, the port-25 reality, and the batch timing bound.
+
 ## Phase 1 — local verification service
 
 Turns the upstream reference API into a clean, local, single-instance verification service with a structured classification model. No database, queue, retry worker, bulk upload, authentication, paid provider, frontend, or CRM integration.

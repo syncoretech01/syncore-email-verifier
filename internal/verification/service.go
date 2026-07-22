@@ -43,6 +43,31 @@ type DomainEvidence struct {
 	Disposable     bool   `json:"disposable"`
 	FreeProvider   bool   `json:"free_provider"`
 	Suggestion     string `json:"suggestion"`
+	// Health is populated only when domain-health checks are enabled and the
+	// domain resolved; nil otherwise.
+	Health *DomainHealthEvidence `json:"health,omitempty"`
+	// Reputation is populated when the feedback loop has outcome history for the
+	// domain; nil otherwise.
+	Reputation *DomainReputationEvidence `json:"reputation,omitempty"`
+}
+
+// DomainHealthEvidence reports free domain-hygiene signals derived from DNS.
+// DKIM is intentionally omitted: it is selector-specific and cannot be verified
+// without a signed message. These signals do not affect classification.
+type DomainHealthEvidence struct {
+	SPF   bool `json:"spf"`   // a v=spf1 TXT record is published
+	DMARC bool `json:"dmarc"` // a v=DMARC1 policy is published at _dmarc.<domain>
+	MX    bool `json:"mx"`    // the domain has a usable mail host
+}
+
+// DomainReputationEvidence is the per-domain outcome history from the feedback
+// loop. Present only when history exists. It never changes the classification,
+// but it does adjust the deliverability score (a high bounce rate lowers it).
+type DomainReputationEvidence struct {
+	Delivered  int     `json:"delivered"`
+	Bounced    int     `json:"bounced"`
+	Complained int     `json:"complained"`
+	BounceRate float64 `json:"bounce_rate"`
 }
 
 // AccountEvidence is neutral structured account evidence.
@@ -59,8 +84,14 @@ type Assessment struct {
 	ReasonCode classify.ReasonCode
 	Retryable  bool
 	Confidence int
-	CheckedAt  time.Time
-	Source     string
+	// DeliverabilityScore (0-100) estimates how likely the address is to accept
+	// mail. It is distinct from Confidence, which is our certainty in the
+	// classification. Deterministic; derived from status + evidence, no network.
+	DeliverabilityScore int
+	// ScoreComponents decomposes DeliverabilityScore into sub-signals.
+	ScoreComponents ScoreComponents
+	CheckedAt       time.Time
+	Source          string
 
 	Syntax  emailverifier.Syntax
 	Domain  DomainEvidence
@@ -70,6 +101,10 @@ type Assessment struct {
 	SMTPAttempted   bool
 	SMTPCheckReason classify.SMTPCheckReason
 
+	// Suppressed is true when the address is on the do-not-verify list; when set,
+	// no network check was performed.
+	Suppressed bool
+
 	Error *ErrorInfo
 
 	// Result is the legacy-compatible evidence for the later GET presenter.
@@ -78,9 +113,13 @@ type Assessment struct {
 
 // Service converts engine evidence into an Assessment.
 type Service struct {
-	engine      Engine
-	clock       func() time.Time
-	smtpEnabled bool
+	engine       Engine
+	clock        func() time.Time
+	smtpEnabled  bool
+	domainHealth bool
+	lookupTXT    func(name string) ([]string, error)
+	suppressed   func(email string) bool
+	reputation   func(domain string) (DomainReputationEvidence, bool)
 }
 
 // Option configures a Service.
@@ -100,13 +139,43 @@ func WithSMTPEnabled(enabled bool) Option {
 	return func(s *Service) { s.smtpEnabled = enabled }
 }
 
-// NewService builds a Service. By default SMTP checks are enabled and CheckedAt
-// uses the wall clock in UTC.
+// WithDomainHealth enables free SPF/DMARC/MX domain-health lookups, folded into
+// the domain evidence. Off by default (adds DNS TXT lookups per verification).
+func WithDomainHealth(enabled bool) Option {
+	return func(s *Service) { s.domainHealth = enabled }
+}
+
+// WithTXTLookup injects the DNS TXT resolver used for domain health, enabling
+// deterministic tests. Defaults to net.LookupTXT.
+func WithTXTLookup(fn func(name string) ([]string, error)) Option {
+	return func(s *Service) {
+		if fn != nil {
+			s.lookupTXT = fn
+		}
+	}
+}
+
+// WithSuppressionCheck injects a predicate that reports whether an address is on
+// the do-not-verify list. Suppressed addresses skip all network checks.
+func WithSuppressionCheck(fn func(email string) bool) Option {
+	return func(s *Service) { s.suppressed = fn }
+}
+
+// WithReputation injects a per-domain reputation lookup (from the feedback loop).
+// When history exists it is attached as evidence and adjusts the deliverability
+// score — closing the accuracy loop.
+func WithReputation(fn func(domain string) (DomainReputationEvidence, bool)) Option {
+	return func(s *Service) { s.reputation = fn }
+}
+
+// NewService builds a Service. By default SMTP checks are enabled, CheckedAt
+// uses the wall clock in UTC, and domain-health checks are off.
 func NewService(engine Engine, opts ...Option) *Service {
 	s := &Service{
 		engine:      engine,
 		clock:       func() time.Time { return time.Now().UTC() },
 		smtpEnabled: true,
+		lookupTXT:   net.LookupTXT,
 	}
 	for _, o := range opts {
 		o(s)
@@ -124,6 +193,11 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 	_ = ctx // not used for cancellation in Phase 1
 
 	email := strings.TrimSpace(rawEmail)
+
+	// Suppression is honored before any network check.
+	if s.suppressed != nil && s.suppressed(email) {
+		return s.suppressedAssessment(email)
+	}
 
 	syntax := s.engine.ParseAddress(email)
 	ev := classify.Evidence{Email: email, SyntaxValid: syntax.Valid}
@@ -169,7 +243,41 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 		smtpEv = s.runSMTP(syntax, &ev)
 	}
 
-	return s.finalize(email, syntax, ev, mx, smtpEv)
+	a := s.finalize(email, syntax, ev, mx, smtpEv)
+	// Domain health is optional, evidence-only, and never changes the status. It
+	// runs only when enabled and the domain actually resolved.
+	if s.domainHealth && ev.DNS == classify.DNSResolved {
+		a.Domain.Health = s.checkDomainHealth(syntax.Domain, ev)
+	}
+	// Feedback loop: attach per-domain reputation and let a poor sending history
+	// pull down the deliverability score (never the classification).
+	if s.reputation != nil {
+		if rep, ok := s.reputation(syntax.Domain); ok {
+			a.Domain.Reputation = &rep
+			a.DeliverabilityScore = adjustScoreForReputation(a.DeliverabilityScore, rep)
+		}
+	}
+	return a
+}
+
+// suppressedAssessment returns a network-free result for a do-not-verify address.
+// It is marked risky (do not send) with the Suppressed flag set; no MX/SMTP is
+// performed. Syntax is still parsed (network-free) for a structured response.
+func (s *Service) suppressedAssessment(email string) Assessment {
+	syntax := s.engine.ParseAddress(email)
+	return Assessment{
+		Email:      email,
+		Status:     classify.StatusRisky,
+		Suppressed: true,
+		CheckedAt:  s.clock(),
+		Syntax:     syntax,
+		Error:      &ErrorInfo{Code: "policy", Message: "address is on the suppression list"},
+		Result: &emailverifier.Result{
+			Email:     email,
+			Reachable: "unknown",
+			Syntax:    syntax,
+		},
+	}
 }
 
 // runSMTP performs the recipient check and folds its evidence into ev, preserving
@@ -204,19 +312,21 @@ func (s *Service) finalize(email string, syntax emailverifier.Syntax, ev classif
 	c := classify.Classify(ev)
 
 	a := Assessment{
-		Email:           email,
-		Status:          c.Status,
-		ReasonCode:      c.ReasonCode,
-		Retryable:       c.Retryable,
-		Confidence:      c.Confidence,
-		CheckedAt:       s.clock(),
-		Source:          string(ev.Source),
-		Syntax:          syntax,
-		Account:         AccountEvidence{RoleAccount: ev.RoleAccount},
-		SMTP:            smtpEv,
-		SMTPAttempted:   ev.SMTPAttempted,
-		SMTPCheckReason: ev.SMTPCheckReason,
-		Error:           sanitizedError(c.ReasonCode),
+		Email:               email,
+		Status:              c.Status,
+		ReasonCode:          c.ReasonCode,
+		Retryable:           c.Retryable,
+		Confidence:          c.Confidence,
+		DeliverabilityScore: deliverabilityScore(c.Status, c.Confidence, ev),
+		ScoreComponents:     computeScoreComponents(ev),
+		CheckedAt:           s.clock(),
+		Source:              string(ev.Source),
+		Syntax:              syntax,
+		Account:             AccountEvidence{RoleAccount: ev.RoleAccount},
+		SMTP:                smtpEv,
+		SMTPAttempted:       ev.SMTPAttempted,
+		SMTPCheckReason:     ev.SMTPCheckReason,
+		Error:               sanitizedError(c.ReasonCode),
 		Domain: DomainEvidence{
 			HasMXRecords:   ev.HasMXRecords,
 			NullMX:         ev.NullMX,
