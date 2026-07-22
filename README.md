@@ -76,6 +76,7 @@ Configuration comes **only from process environment variables**. `.env.example` 
 | `SYNCORE_VERIFIER_BATCH_CONCURRENCY` | Batch worker-pool size | `10` | positive integer | No | Must be a positive integer. |
 | `SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES` | Max batch request body size (bytes) | `65536` | positive integer | No | Must be a positive integer. |
 | `SYNCORE_VERIFIER_DOMAIN_HEALTH` | Enable free SPF/DMARC/MX domain-health lookups | `false` | boolean | No | Must parse as a boolean. |
+| `SYNCORE_VERIFIER_GRAVATAR_CHECK` | Enable a per-address Gravatar lookup (engagement signal) | `false` | boolean | No | Adds one external HTTP call per verification; must parse as a boolean. |
 | `SYNCORE_VERIFIER_STORE` | Result-cache / idempotency backend | `memory` | `memory` \| `postgres` | No | Must be `memory` or `postgres`. |
 | `SYNCORE_VERIFIER_DATABASE_URL` | Postgres connection string | _(empty)_ | URL | When `STORE=postgres` | Required when `STORE=postgres`. |
 | `SYNCORE_VERIFIER_API_KEYS` | Additional accepted credentials (`name:key` or `key`, comma-separated) | _(empty)_ | list | No | Any valid key authenticates like the bearer token; hashed at load. |
@@ -191,6 +192,7 @@ Two additive fields accompany the classification:
 
 - **`deliverability_score`** (0–100) — a deterministic, network-free estimate of how likely the address is to **accept mail**, derived from status + evidence. It is distinct from `confidence` (our certainty in the *classification*): an `invalid` result scores `0`, a clean `valid` scores high, and a `disposable` or `catch_all` address scores low even when we are confident. This is a v1 heuristic; per-domain reputation refinement is future work.
 - **`domain.domain_health`** — present only when `SYNCORE_VERIFIER_DOMAIN_HEALTH=true` and the domain resolves. Reports free DNS hygiene signals: `spf` (a `v=spf1` record), `dmarc` (a `v=DMARC1` policy at `_dmarc.<domain>`), and `mx` (a usable mail host). DKIM is intentionally omitted — it is selector-specific and cannot be verified without a signed message. These signals never change the classification.
+- **`account.gravatar`** — present only when `SYNCORE_VERIFIER_GRAVATAR_CHECK=true`. A public Gravatar profile (`has_gravatar` + `url`) is a weak positive **engagement** signal. It gives a small bonus to the `deliverability_score` of an *uncertain* result (`unknown`/`risky` only — never a `valid` or `invalid`), always capped by a poor `domain.reputation`, and it **never** changes the classification. Off by default because it adds one external HTTP call per verification.
 
 ### `POST /v1/verifications:batch`
 

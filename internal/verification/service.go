@@ -73,6 +73,16 @@ type DomainReputationEvidence struct {
 // AccountEvidence is neutral structured account evidence.
 type AccountEvidence struct {
 	RoleAccount bool `json:"role_account"`
+	// Gravatar is populated only when the (optional, off-by-default) Gravatar
+	// check runs; nil otherwise. A public profile is a weak positive engagement
+	// signal that never changes the classification.
+	Gravatar *GravatarEvidence `json:"gravatar,omitempty"`
+}
+
+// GravatarEvidence reports whether the address has a public Gravatar profile.
+type GravatarEvidence struct {
+	HasGravatar bool   `json:"has_gravatar"`
+	URL         string `json:"url,omitempty"`
 }
 
 // Assessment is the single internal verification result. It carries the
@@ -120,6 +130,7 @@ type Service struct {
 	lookupTXT    func(name string) ([]string, error)
 	suppressed   func(email string) bool
 	reputation   func(domain string) (DomainReputationEvidence, bool)
+	gravatar     func(email string) (hasGravatar bool, url string)
 }
 
 // Option configures a Service.
@@ -166,6 +177,15 @@ func WithSuppressionCheck(fn func(email string) bool) Option {
 // score — closing the accuracy loop.
 func WithReputation(fn func(domain string) (DomainReputationEvidence, bool)) Option {
 	return func(s *Service) { s.reputation = fn }
+}
+
+// WithGravatarCheck injects a Gravatar lookup (typically the engine's
+// CheckGravatar). Off by default because it makes an external HTTP call per
+// verification. When enabled, a public profile is attached as engagement
+// evidence and gives a small deliverability-score bonus to uncertain results —
+// never changing the classification.
+func WithGravatarCheck(fn func(email string) (hasGravatar bool, url string)) Option {
+	return func(s *Service) { s.gravatar = fn }
 }
 
 // NewService builds a Service. By default SMTP checks are enabled, CheckedAt
@@ -248,6 +268,21 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 	// runs only when enabled and the domain actually resolved.
 	if s.domainHealth && ev.DNS == classify.DNSResolved {
 		a.Domain.Health = s.checkDomainHealth(syntax.Domain, ev)
+	}
+	// Gravatar is optional engagement evidence (an external HTTP call). We skip
+	// definitively-invalid results (nothing to reward, and no wasted call). A
+	// public profile gives a small score bonus to uncertain results; it never
+	// changes the classification. Applied before reputation so a bad bounce
+	// history still caps the score.
+	if s.gravatar != nil && a.Status != classify.StatusInvalid {
+		has, url := s.gravatar(email)
+		a.Account.Gravatar = &GravatarEvidence{HasGravatar: has, URL: url}
+		if a.Result != nil {
+			a.Result.Gravatar = &emailverifier.Gravatar{HasGravatar: has, GravatarUrl: url}
+		}
+		if has {
+			a.DeliverabilityScore = applyGravatarBonus(a.DeliverabilityScore, a.Status)
+		}
 	}
 	// Feedback loop: attach per-domain reputation and let a poor sending history
 	// pull down the deliverability score (never the classification).

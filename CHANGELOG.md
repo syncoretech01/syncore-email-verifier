@@ -2,6 +2,12 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Gravatar engagement signal (Phase 6)
+
+- **`SYNCORE_VERIFIER_GRAVATAR_CHECK`** (off by default) enables a per-address Gravatar lookup. A public profile is surfaced as `account.gravatar` (`has_gravatar` + `url`) engagement evidence and gives a small, capped `deliverability_score` bonus to **uncertain** results (`unknown`/`risky` only — never `valid` or `invalid`).
+- The bonus is applied **before** the feedback-loop reputation adjustment, so a poor real-world bounce history still caps the score, and it **never** changes the classification.
+- Wired via the existing engine `CheckGravatar`; injected into the service as an optional dependency (like domain-health and reputation). Additive and config-flagged; no new paid dependency. Off by default because it adds one external HTTP call per verification.
+
 ## Feedback provider adapters (Phase 7)
 
 - **`POST /v1/feedback/ses`** — ingests raw Amazon SES events delivered over SNS (permanent bounce → `bounced`, complaint → `complained`, delivery → `delivered`, open/click → `engaged`; transient bounces ignored) and handles the SNS `SubscriptionConfirmation` handshake. Accepts SNS's `text/plain` content type.

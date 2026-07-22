@@ -453,7 +453,13 @@ type scoreComponentsDTO struct {
 }
 
 type accountDTO struct {
-	RoleAccount bool `json:"role_account"`
+	RoleAccount bool         `json:"role_account"`
+	Gravatar    *gravatarDTO `json:"gravatar,omitempty"`
+}
+
+type gravatarDTO struct {
+	HasGravatar bool   `json:"has_gravatar"`
+	URL         string `json:"url,omitempty"`
 }
 
 type smtpDTO struct {
@@ -538,7 +544,7 @@ func toVerification(a verification.Assessment) verificationDTO {
 			DomainHealth:   toDomainHealthDTO(a.Domain.Health),
 			Reputation:     toDomainReputationDTO(a.Domain.Reputation),
 		},
-		Account: accountDTO{RoleAccount: a.Account.RoleAccount},
+		Account: accountDTO{RoleAccount: a.Account.RoleAccount, Gravatar: toGravatarDTO(a.Account.Gravatar)},
 		SMTP:    toSMTPDTO(a),
 		Error:   toAPIError(a.Error),
 	}
@@ -558,6 +564,15 @@ func toDomainReputationDTO(r *verification.DomainReputationEvidence) *domainRepu
 		return nil
 	}
 	return &domainReputationDTO{Delivered: r.Delivered, Bounced: r.Bounced, Complained: r.Complained, BounceRate: r.BounceRate}
+}
+
+// toGravatarDTO maps optional Gravatar engagement evidence; nil when the check
+// was not run.
+func toGravatarDTO(g *verification.GravatarEvidence) *gravatarDTO {
+	if g == nil {
+		return nil
+	}
+	return &gravatarDTO{HasGravatar: g.HasGravatar, URL: g.URL}
 }
 
 // toSMTPDTO builds the smtp block, safely handling nil SMTP evidence (short
