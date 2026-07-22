@@ -111,6 +111,11 @@ type Assessment struct {
 	SMTPAttempted   bool
 	SMTPCheckReason classify.SMTPCheckReason
 
+	// CatchAllLikelihood is set only for a confirmed catch-all domain: "likely_valid"
+	// / "likely_invalid" / "unknown", derived from the domain's feedback-loop
+	// bounce history. It refines the deliverability score but never the status.
+	CatchAllLikelihood string
+
 	// Suppressed is true when the address is on the do-not-verify list; when set,
 	// no network check was performed.
 	Suppressed bool
@@ -284,11 +289,22 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 			a.DeliverabilityScore = applyGravatarBonus(a.DeliverabilityScore, a.Status)
 		}
 	}
-	// Feedback loop: attach per-domain reputation and let a poor sending history
-	// pull down the deliverability score (never the classification).
+	// A confirmed catch-all cannot be verified per-mailbox; default its
+	// sub-confidence to unknown, then let the feedback loop refine it below.
+	catchAllConfirmed := a.SMTP != nil && a.SMTP.CatchAllResult == string(classify.CatchAllConfirmed)
+	if catchAllConfirmed {
+		a.CatchAllLikelihood = CatchAllUnknown
+	}
+
+	// Feedback loop: attach per-domain reputation and let real sending history
+	// refine the score (a poor bounce history pulls it down; a reliably-delivering
+	// catch-all is lifted and labeled likely_valid). Never the classification.
 	if s.reputation != nil {
 		if rep, ok := s.reputation(syntax.Domain); ok {
 			a.Domain.Reputation = &rep
+			if catchAllConfirmed {
+				a.DeliverabilityScore, a.CatchAllLikelihood = refineCatchAllScore(a.DeliverabilityScore, rep)
+			}
 			a.DeliverabilityScore = adjustScoreForReputation(a.DeliverabilityScore, rep)
 		}
 	}

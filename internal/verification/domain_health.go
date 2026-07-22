@@ -124,6 +124,48 @@ func computeScoreComponents(ev classify.Evidence) ScoreComponents {
 // profile earns — a weak "this is a real, used address" engagement signal.
 const gravatarBonus = 8
 
+// Catch-all sub-confidence: a confirmed catch-all domain accepts every recipient,
+// so per-mailbox verification is impossible. But the domain's real sending
+// history (from the feedback loop) tells us whether it tends to accept mail that
+// sticks. These labels surface that nuance without changing the classification.
+const (
+	CatchAllLikelyValid   = "likely_valid"
+	CatchAllLikelyInvalid = "likely_invalid"
+	CatchAllUnknown       = "unknown"
+)
+
+const (
+	// catchAllMinSamples is the minimum delivered+bounced history before the
+	// bounce rate is trusted enough to label a catch-all.
+	catchAllMinSamples = 5
+	// catchAllLikelyValidScore is the deliverability score a reliably-delivering
+	// catch-all is lifted to (above the flat catch-all baseline of 50).
+	catchAllLikelyValidScore = 75
+)
+
+// refineCatchAllScore uses a confirmed catch-all domain's real bounce history to
+// derive a sub-confidence label and, for a reliably-delivering domain, lift the
+// deliverability score above the flat catch-all baseline. It never raises the
+// score for a poor-history domain (adjustScoreForReputation caps that separately)
+// and never touches the classification.
+func refineCatchAllScore(score int, rep DomainReputationEvidence) (int, string) {
+	if rep.Delivered+rep.Bounced < catchAllMinSamples {
+		return score, CatchAllUnknown // not enough history to judge
+	}
+	switch {
+	case rep.BounceRate < 0.1:
+		// A catch-all that reliably delivers is likely accepting real mail.
+		if score < catchAllLikelyValidScore {
+			score = catchAllLikelyValidScore
+		}
+		return clampScore(score), CatchAllLikelyValid
+	case rep.BounceRate >= 0.2:
+		return score, CatchAllLikelyInvalid // the reputation cap lowers the score
+	default:
+		return score, CatchAllUnknown
+	}
+}
+
 // applyGravatarBonus rewards a public Gravatar profile with a small, capped
 // bonus, but only for uncertain results (unknown/risky). A valid result is
 // already high and an invalid one refuses mail regardless of a public profile,
