@@ -414,3 +414,26 @@ func TestPOST_GravatarEvidence(t *testing.T) {
 	_, present := acct["gravatar"]
 	assert.False(t, present, "gravatar omitted when not checked")
 }
+
+func TestPOST_CatchAllConfidence(t *testing.T) {
+	// Present for a confirmed catch-all with a likelihood label.
+	a := simpleAssessment(classify.StatusRisky, classify.ReasonCatchAll, nil)
+	a.SMTP = &emailverifier.SMTP{CatchAll: true, CatchAllResult: "confirmed", Source: "smtp"}
+	a.CatchAllLikelihood = "likely_valid"
+	h := newTestServer(t, &stubService{assessment: a}, 0)
+	rec := do(t, h, http.MethodPost, "/v1/verifications", "application/json", `{"email":"x@y.com"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var dto verificationDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &dto))
+	assert.Equal(t, "likely_valid", dto.SMTP.CatchAllConfidence)
+
+	// Omitted from the smtp object for a non-catch-all result.
+	h2 := newTestServer(t, &stubService{assessment: acceptedAssessment()}, 0)
+	rec2 := do(t, h2, http.MethodPost, "/v1/verifications", "application/json", `{"email":"x@y.com"}`)
+	var m map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &m))
+	var smtp map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(m["smtp"], &smtp))
+	_, present := smtp["catch_all_confidence"]
+	assert.False(t, present, "catch_all_confidence omitted when not a catch-all")
+}

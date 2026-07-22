@@ -463,17 +463,20 @@ type gravatarDTO struct {
 }
 
 type smtpDTO struct {
-	HostExists      bool   `json:"host_exists"`
-	Deliverable     bool   `json:"deliverable"`
-	CatchAll        bool   `json:"catch_all"`
-	CatchAllResult  string `json:"catch_all_result"`
-	FullInbox       bool   `json:"full_inbox"`
-	Disabled        bool   `json:"disabled"`
-	RecipientResult string `json:"recipient_result"`
-	RecipientReason string `json:"recipient_reason"`
-	SMTPCode        int    `json:"smtp_code"`
-	SMTPAttempted   bool   `json:"smtp_attempted"`
-	SMTPCheckReason string `json:"smtp_check_reason"`
+	HostExists     bool   `json:"host_exists"`
+	Deliverable    bool   `json:"deliverable"`
+	CatchAll       bool   `json:"catch_all"`
+	CatchAllResult string `json:"catch_all_result"`
+	// CatchAllConfidence is present only for a confirmed catch-all: likely_valid /
+	// likely_invalid / unknown, from the domain's feedback-loop bounce history.
+	CatchAllConfidence string `json:"catch_all_confidence,omitempty"`
+	FullInbox          bool   `json:"full_inbox"`
+	Disabled           bool   `json:"disabled"`
+	RecipientResult    string `json:"recipient_result"`
+	RecipientReason    string `json:"recipient_reason"`
+	SMTPCode           int    `json:"smtp_code"`
+	SMTPAttempted      bool   `json:"smtp_attempted"`
+	SMTPCheckReason    string `json:"smtp_check_reason"`
 }
 
 // verificationDTO is the structured POST response shape.
@@ -579,8 +582,9 @@ func toGravatarDTO(g *verification.GravatarEvidence) *gravatarDTO {
 // circuits). It never fabricates accepted/rejected evidence.
 func toSMTPDTO(a verification.Assessment) smtpDTO {
 	dto := smtpDTO{
-		SMTPAttempted:   a.SMTPAttempted,
-		SMTPCheckReason: string(a.SMTPCheckReason),
+		SMTPAttempted:      a.SMTPAttempted,
+		SMTPCheckReason:    string(a.SMTPCheckReason),
+		CatchAllConfidence: a.CatchAllLikelihood,
 	}
 	if a.SMTP != nil {
 		dto.HostExists = a.SMTP.HostExists

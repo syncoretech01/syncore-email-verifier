@@ -2,6 +2,12 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Feedback-driven catch-all sub-confidence (Phase 5)
+
+- For a **confirmed catch-all** domain (where per-mailbox verification is impossible), the response now includes **`smtp.catch_all_confidence`**: `likely_valid` / `likely_invalid` / `unknown`, derived from the domain's real bounce history in the feedback loop.
+- A reliably-delivering catch-all (bounce rate < 10% with enough history) is **lifted above the flat catch-all deliverability baseline** (to 75) and labeled `likely_valid`; a poor-history domain is labeled `likely_invalid` and capped down by the existing reputation adjustment; otherwise `unknown`.
+- The refinement is applied before the reputation cap and **never changes the classification** (still `risky`/`catch_all`). No new configuration — it activates automatically once the feedback loop (see the SES/Smartlead adapters) has history for a domain. Additive; no new dependency.
+
 ## Gravatar engagement signal (Phase 6)
 
 - **`SYNCORE_VERIFIER_GRAVATAR_CHECK`** (off by default) enables a per-address Gravatar lookup. A public profile is surfaced as `account.gravatar` (`has_gravatar` + `url`) engagement evidence and gives a small, capped `deliverability_score` bonus to **uncertain** results (`unknown`/`risky` only — never `valid` or `invalid`).
