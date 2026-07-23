@@ -23,6 +23,14 @@ type Store[V any] interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// Purger is implemented by stores that can proactively drop expired entries.
+// The in-memory backend implements it (Postgres manages expiry in the database),
+// so a background sweeper can free memory between accesses.
+type Purger interface {
+	// PurgeExpired removes expired entries and returns how many were removed.
+	PurgeExpired() int
+}
+
 type entry[V any] struct {
 	value     V
 	expiresAt time.Time
@@ -109,6 +117,34 @@ func (m *Memory[V]) Delete(_ context.Context, key string) error {
 	m.remove(key)
 	m.mu.Unlock()
 	return nil
+}
+
+// PurgeExpired removes every entry whose TTL has elapsed and returns the number
+// removed. Safe for concurrent use; intended to be called periodically so
+// expired entries don't linger in memory between accesses.
+func (m *Memory[V]) PurgeExpired() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := m.now()
+	removed := 0
+	for key, e := range m.entries {
+		if !now.Before(e.expiresAt) { // now >= expiresAt: expired
+			delete(m.entries, key)
+			removed++
+		}
+	}
+	if removed > 0 {
+		// Rebuild the insertion-order slice, dropping purged keys (in place).
+		kept := m.order[:0]
+		for _, k := range m.order {
+			if _, ok := m.entries[k]; ok {
+				kept = append(kept, k)
+			}
+		}
+		m.order = kept
+	}
+	return removed
 }
 
 // Len reports the current number of stored entries.

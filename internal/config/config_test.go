@@ -32,6 +32,8 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "", cfg.AuthToken)
 	assert.Equal(t, time.Duration(0), cfg.CacheTTL)
 	assert.Equal(t, time.Duration(0), cfg.CacheTTLUnknown)
+	assert.Equal(t, time.Duration(0), cfg.MXCacheTTL)
+	assert.Equal(t, time.Duration(0), cfg.PurgeInterval)
 	assert.Equal(t, int64(10000), cfg.CacheMaxEntries)
 	assert.Equal(t, int64(100), cfg.BatchMaxItems)
 	assert.Equal(t, int64(10), cfg.BatchConcurrency)
@@ -68,6 +70,8 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvAuthToken:          "override-token",
 		EnvCacheTTL:           "10m",
 		EnvCacheTTLUnknown:    "30s",
+		EnvMXCacheTTL:         "5m",
+		EnvPurgeInterval:      "10m",
 		EnvCacheMaxEntries:    "500",
 		EnvBatchMaxItems:      "50",
 		EnvBatchConcurrency:   "5",
@@ -102,6 +106,8 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.Equal(t, "override-token", cfg.AuthToken)
 	assert.Equal(t, 10*time.Minute, cfg.CacheTTL)
 	assert.Equal(t, 30*time.Second, cfg.CacheTTLUnknown)
+	assert.Equal(t, 5*time.Minute, cfg.MXCacheTTL)
+	assert.Equal(t, 10*time.Minute, cfg.PurgeInterval)
 	assert.Equal(t, int64(500), cfg.CacheMaxEntries)
 	assert.Equal(t, int64(50), cfg.BatchMaxItems)
 	assert.Equal(t, int64(5), cfg.BatchConcurrency)
@@ -161,6 +167,8 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"negative cache ttl", map[string]string{EnvCacheTTL: "-1m"}, EnvCacheTTL},
 		{"invalid cache ttl", map[string]string{EnvCacheTTL: "tenminutes"}, EnvCacheTTL},
 		{"invalid unknown cache ttl", map[string]string{EnvCacheTTLUnknown: "nope"}, EnvCacheTTLUnknown},
+		{"invalid mx cache ttl", map[string]string{EnvMXCacheTTL: "soon"}, EnvMXCacheTTL},
+		{"negative purge interval", map[string]string{EnvPurgeInterval: "-1m"}, EnvPurgeInterval},
 		{"zero cache max entries", map[string]string{EnvCacheMaxEntries: "0"}, EnvCacheMaxEntries},
 		{"zero batch max items", map[string]string{EnvBatchMaxItems: "0"}, EnvBatchMaxItems},
 		{"negative batch concurrency", map[string]string{EnvBatchConcurrency: "-1"}, EnvBatchConcurrency},

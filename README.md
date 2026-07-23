@@ -72,6 +72,8 @@ Configuration comes **only from process environment variables**. `.env.example` 
 | `SYNCORE_VERIFIER_CACHE_TTL` | Result-cache lifetime for terminal (`valid`/`invalid`) results; `0` disables the cache | `0` | Go duration | No | Must parse as a duration and be `>= 0`. |
 | `SYNCORE_VERIFIER_CACHE_TTL_UNKNOWN` | Result-cache lifetime for retryable (`unknown`) results | `0` → `min(CACHE_TTL, 1m)` | Go duration | No | Must parse as a duration and be `>= 0`; clamped to `CACHE_TTL`. |
 | `SYNCORE_VERIFIER_CACHE_MAX_ENTRIES` | Max in-memory result-cache entries | `10000` | positive integer | No | Must be a positive integer. |
+| `SYNCORE_VERIFIER_MX_CACHE_TTL` | Per-domain MX-lookup cache lifetime; `0` disables it | `0` | Go duration | No | Collapses repeat MX lookups for same-domain addresses; must parse as a duration and be `>= 0`. |
+| `SYNCORE_VERIFIER_PURGE_INTERVAL` | Interval for the background sweep that drops expired in-memory entries; `0` disables it | `0` | Go duration | No | Only sweeps the in-memory backend (Postgres expires in-DB); must parse as a duration and be `>= 0`. |
 | `SYNCORE_VERIFIER_BATCH_MAX_ITEMS` | Max emails per batch request | `100` | positive integer | No | Must be a positive integer. |
 | `SYNCORE_VERIFIER_BATCH_CONCURRENCY` | Batch worker-pool size | `10` | positive integer | No | Must be a positive integer. |
 | `SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES` | Max batch request body size (bytes) | `65536` | positive integer | No | Must be a positive integer. |
