@@ -80,6 +80,7 @@ Configuration comes **only from process environment variables**. `.env.example` 
 | `SYNCORE_VERIFIER_DOMAIN_HEALTH` | Enable free SPF/DMARC/MX domain-health lookups | `false` | boolean | No | Must parse as a boolean. |
 | `SYNCORE_VERIFIER_GRAVATAR_CHECK` | Enable a per-address Gravatar lookup (engagement signal) | `false` | boolean | No | Adds one external HTTP call per verification; must parse as a boolean. |
 | `SYNCORE_VERIFIER_DNSBL_CHECK` | Enable a domain-blocklist (Spamhaus DBL) lookup | `false` | boolean | No | Adds one external DNS lookup per verification; must parse as a boolean. |
+| `SYNCORE_VERIFIER_DEV_CONSOLE` | Serve a browser console at `GET /` for trying verifications by hand | `false` | boolean | No | For local use; the page is same-origin and passes through auth/rate-limit like any route. Must parse as a boolean. |
 | `SYNCORE_VERIFIER_STORE` | Result-cache / idempotency backend | `memory` | `memory` \| `postgres` | No | Must be `memory` or `postgres`. |
 | `SYNCORE_VERIFIER_DATABASE_URL` | Postgres connection string | _(empty)_ | URL | When `STORE=postgres` | Required when `STORE=postgres`. |
 | `SYNCORE_VERIFIER_API_KEYS` | Additional accepted credentials (`name:key` or `key`, comma-separated) | _(empty)_ | list | No | Any valid key authenticates like the bearer token; hashed at load. |

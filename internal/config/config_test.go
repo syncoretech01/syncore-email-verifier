@@ -41,6 +41,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.False(t, cfg.DomainHealth)
 	assert.False(t, cfg.GravatarCheck)
 	assert.False(t, cfg.DNSBLCheck)
+	assert.False(t, cfg.DevConsole)
 	assert.Equal(t, "memory", cfg.Store)
 	assert.Equal(t, "", cfg.DatabaseURL)
 	assert.Equal(t, int64(4), cfg.Workers)
@@ -79,6 +80,7 @@ func TestLoad_EachOverride(t *testing.T) {
 		EnvDomainHealth:       "true",
 		EnvGravatarCheck:      "true",
 		EnvDNSBLCheck:         "true",
+		EnvDevConsole:         "true",
 		EnvStore:              "postgres",
 		EnvDatabaseURL:        "postgres://user:pass@localhost:5432/verifier",
 		EnvWorkers:            "8",
@@ -115,6 +117,7 @@ func TestLoad_EachOverride(t *testing.T) {
 	assert.True(t, cfg.DomainHealth)
 	assert.True(t, cfg.GravatarCheck)
 	assert.True(t, cfg.DNSBLCheck)
+	assert.True(t, cfg.DevConsole)
 	assert.Equal(t, "postgres", cfg.Store)
 	assert.Equal(t, "postgres://user:pass@localhost:5432/verifier", cfg.DatabaseURL)
 	assert.Equal(t, int64(8), cfg.Workers)
@@ -176,6 +179,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{"invalid domain health bool", map[string]string{EnvDomainHealth: "maybe"}, EnvDomainHealth},
 		{"invalid gravatar bool", map[string]string{EnvGravatarCheck: "maybe"}, EnvGravatarCheck},
 		{"invalid dnsbl bool", map[string]string{EnvDNSBLCheck: "maybe"}, EnvDNSBLCheck},
+		{"invalid dev console bool", map[string]string{EnvDevConsole: "maybe"}, EnvDevConsole},
 		{"invalid store", map[string]string{EnvStore: "mysql"}, EnvStore},
 		{"postgres without database url", map[string]string{EnvStore: "postgres"}, EnvDatabaseURL},
 		{"zero workers", map[string]string{EnvWorkers: "0"}, EnvWorkers},

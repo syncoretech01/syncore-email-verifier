@@ -38,6 +38,7 @@ const (
 	EnvDomainHealth         = "SYNCORE_VERIFIER_DOMAIN_HEALTH"
 	EnvGravatarCheck        = "SYNCORE_VERIFIER_GRAVATAR_CHECK"
 	EnvDNSBLCheck           = "SYNCORE_VERIFIER_DNSBL_CHECK"
+	EnvDevConsole           = "SYNCORE_VERIFIER_DEV_CONSOLE"
 	EnvStore                = "SYNCORE_VERIFIER_STORE"
 	EnvDatabaseURL          = "SYNCORE_VERIFIER_DATABASE_URL"
 	EnvWorkers              = "SYNCORE_VERIFIER_WORKERS"
@@ -98,6 +99,11 @@ type Config struct {
 	// adds `blocklisted` evidence and caps the score for listed domains (off by
 	// default; adds one external DNS lookup per verification).
 	DNSBLCheck bool
+	// DevConsole serves a small same-origin HTML console at GET / for manually
+	// trying verifications from a browser (off by default). Intended for local
+	// use; when auth is enabled the page load requires a credential like any
+	// other route, so the console's token field must be filled.
+	DevConsole bool
 	// Store selects the backend for the result cache and idempotency store:
 	// "memory" (default) or "postgres".
 	Store string
@@ -203,6 +209,9 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if cfg.DNSBLCheck, err = parseBool(lookup, EnvDNSBLCheck, false); err != nil {
+		return nil, err
+	}
+	if cfg.DevConsole, err = parseBool(lookup, EnvDevConsole, false); err != nil {
 		return nil, err
 	}
 	if cfg.DomainHealth, err = parseBool(lookup, EnvDomainHealth, false); err != nil {

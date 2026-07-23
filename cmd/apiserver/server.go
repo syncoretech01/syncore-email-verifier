@@ -39,6 +39,11 @@ func newRouter(h *Handlers, authToken string) http.Handler {
 	router.GET("/health", h.handleHealth)
 	router.GET("/ready", h.handleReady)
 	router.GET("/metrics", h.handleMetrics)
+	// Optional browser console (off by default). Served same-origin so its API
+	// calls need no CORS; it still passes through auth/rate-limit like any route.
+	if h.devConsole {
+		router.GET("/", h.handleConsole)
+	}
 
 	router.NotFound = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "resource not found")
