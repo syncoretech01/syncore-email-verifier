@@ -69,6 +69,9 @@ func main() {
 			return g.HasGravatar, g.GravatarUrl
 		})(svc)
 	}
+	if cfg.DNSBLCheck {
+		verification.WithDNSBLCheck(spamhausDBLLookup)(svc)
+	}
 
 	// Structured logs + a dependency-free metrics registry.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))

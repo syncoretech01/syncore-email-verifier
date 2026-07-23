@@ -437,3 +437,26 @@ func TestPOST_CatchAllConfidence(t *testing.T) {
 	_, present := smtp["catch_all_confidence"]
 	assert.False(t, present, "catch_all_confidence omitted when not a catch-all")
 }
+
+func TestPOST_Blocklisted(t *testing.T) {
+	listed := true
+	a := acceptedAssessment()
+	a.Domain.Blocklisted = &listed
+	h := newTestServer(t, &stubService{assessment: a}, 0)
+	rec := do(t, h, http.MethodPost, "/v1/verifications", "application/json", `{"email":"x@y.com"}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var dto verificationDTO
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &dto))
+	require.NotNil(t, dto.Domain.Blocklisted)
+	assert.True(t, *dto.Domain.Blocklisted)
+
+	// Omitted when not checked.
+	h2 := newTestServer(t, &stubService{assessment: acceptedAssessment()}, 0)
+	rec2 := do(t, h2, http.MethodPost, "/v1/verifications", "application/json", `{"email":"x@y.com"}`)
+	var m map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &m))
+	var dom map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(m["domain"], &dom))
+	_, present := dom["blocklisted"]
+	assert.False(t, present, "blocklisted omitted when not checked")
+}

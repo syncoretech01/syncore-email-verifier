@@ -431,6 +431,7 @@ type domainDTO struct {
 	Suggestion     string               `json:"suggestion"`
 	DomainHealth   *domainHealthDTO     `json:"domain_health,omitempty"`
 	Reputation     *domainReputationDTO `json:"reputation,omitempty"`
+	Blocklisted    *bool                `json:"blocklisted,omitempty"`
 }
 
 type domainHealthDTO struct {
@@ -546,6 +547,7 @@ func toVerification(a verification.Assessment) verificationDTO {
 			Suggestion:     a.Domain.Suggestion,
 			DomainHealth:   toDomainHealthDTO(a.Domain.Health),
 			Reputation:     toDomainReputationDTO(a.Domain.Reputation),
+			Blocklisted:    a.Domain.Blocklisted,
 		},
 		Account: accountDTO{RoleAccount: a.Account.RoleAccount, Gravatar: toGravatarDTO(a.Account.Gravatar)},
 		SMTP:    toSMTPDTO(a),
