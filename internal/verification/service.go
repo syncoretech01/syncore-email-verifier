@@ -49,6 +49,10 @@ type DomainEvidence struct {
 	// Reputation is populated when the feedback loop has outcome history for the
 	// domain; nil otherwise.
 	Reputation *DomainReputationEvidence `json:"reputation,omitempty"`
+	// Blocklisted is populated only when the (optional) domain blocklist (DNSBL)
+	// check runs: true if the domain is on a domain-based blocklist (e.g. Spamhaus
+	// DBL). A listing caps the deliverability score but never changes the status.
+	Blocklisted *bool `json:"blocklisted,omitempty"`
 }
 
 // DomainHealthEvidence reports free domain-hygiene signals derived from DNS.
@@ -136,6 +140,7 @@ type Service struct {
 	suppressed   func(email string) bool
 	reputation   func(domain string) (DomainReputationEvidence, bool)
 	gravatar     func(email string) (hasGravatar bool, url string)
+	dnsbl        func(domain string) (blocklisted bool, err error)
 }
 
 // Option configures a Service.
@@ -191,6 +196,14 @@ func WithReputation(fn func(domain string) (DomainReputationEvidence, bool)) Opt
 // never changing the classification.
 func WithGravatarCheck(fn func(email string) (hasGravatar bool, url string)) Option {
 	return func(s *Service) { s.gravatar = fn }
+}
+
+// WithDNSBLCheck injects a domain-blocklist (DNSBL) lookup — typically a Spamhaus
+// DBL query. Off by default. When enabled and the domain resolves, a listing is
+// attached as `blocklisted` evidence and caps the deliverability score. It never
+// changes the classification. Adds one external DNS lookup per verification.
+func WithDNSBLCheck(fn func(domain string) (blocklisted bool, err error)) Option {
+	return func(s *Service) { s.dnsbl = fn }
 }
 
 // NewService builds a Service. By default SMTP checks are enabled, CheckedAt
@@ -273,6 +286,14 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 	// runs only when enabled and the domain actually resolved.
 	if s.domainHealth && ev.DNS == classify.DNSResolved {
 		a.Domain.Health = s.checkDomainHealth(syntax.Domain, ev)
+	}
+	// Domain blocklist (DNSBL): optional, evidence + score cap, never the status.
+	// A domain on a spam/malicious blocklist is a strong "do not send" signal.
+	if s.dnsbl != nil && ev.DNS == classify.DNSResolved {
+		if listed, err := s.dnsbl(syntax.Domain); err == nil {
+			a.Domain.Blocklisted = &listed
+			a.DeliverabilityScore = applyBlocklistPenalty(a.DeliverabilityScore, listed)
+		}
 	}
 	// Gravatar is optional engagement evidence (an external HTTP call). We skip
 	// definitively-invalid results (nothing to reward, and no wasted call). A

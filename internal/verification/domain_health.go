@@ -124,6 +124,19 @@ func computeScoreComponents(ev classify.Evidence) ScoreComponents {
 // profile earns — a weak "this is a real, used address" engagement signal.
 const gravatarBonus = 8
 
+// dnsblBlockedScore is the deliverability-score ceiling for a domain found on a
+// domain blocklist (DNSBL). A listed domain is a strong "do not send" signal.
+const dnsblBlockedScore = 15
+
+// applyBlocklistPenalty caps the score when the domain is blocklisted. It never
+// raises the score and never touches the classification.
+func applyBlocklistPenalty(score int, blocklisted bool) int {
+	if blocklisted && score > dnsblBlockedScore {
+		return dnsblBlockedScore
+	}
+	return clampScore(score)
+}
+
 // Catch-all sub-confidence: a confirmed catch-all domain accepts every recipient,
 // so per-mailbox verification is impossible. But the domain's real sending
 // history (from the feedback loop) tells us whether it tends to accept mail that

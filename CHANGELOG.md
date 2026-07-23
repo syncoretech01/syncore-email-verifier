@@ -2,6 +2,11 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Domain blocklist (DNSBL) check (Phase 6)
+
+- **`SYNCORE_VERIFIER_DNSBL_CHECK`** (off by default) enables a Spamhaus DBL domain-blocklist lookup. A domain on the blocklist (spam/phishing/malware) is surfaced as `domain.blocklisted: true` and its `deliverability_score` is capped (a strong "do not send" signal); the classification is never changed.
+- Evidence-only + score cap, like domain-health and reputation. Spamhaus error/blocked return codes are treated as not-listed to avoid false positives. Additive and config-flagged; no new paid dependency (one extra DNS lookup per verification).
+
 ## Feedback-driven catch-all sub-confidence (Phase 5)
 
 - For a **confirmed catch-all** domain (where per-mailbox verification is impossible), the response now includes **`smtp.catch_all_confidence`**: `likely_valid` / `likely_invalid` / `unknown`, derived from the domain's real bounce history in the feedback loop.

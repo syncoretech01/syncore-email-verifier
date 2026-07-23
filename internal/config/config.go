@@ -35,6 +35,7 @@ const (
 	EnvBatchMaxBodyBytes    = "SYNCORE_VERIFIER_BATCH_MAX_BODY_BYTES"
 	EnvDomainHealth         = "SYNCORE_VERIFIER_DOMAIN_HEALTH"
 	EnvGravatarCheck        = "SYNCORE_VERIFIER_GRAVATAR_CHECK"
+	EnvDNSBLCheck           = "SYNCORE_VERIFIER_DNSBL_CHECK"
 	EnvStore                = "SYNCORE_VERIFIER_STORE"
 	EnvDatabaseURL          = "SYNCORE_VERIFIER_DATABASE_URL"
 	EnvWorkers              = "SYNCORE_VERIFIER_WORKERS"
@@ -85,6 +86,10 @@ type Config struct {
 	// GravatarCheck enables a per-address Gravatar lookup (an external HTTP call)
 	// that adds engagement evidence and a small score bonus (off by default).
 	GravatarCheck bool
+	// DNSBLCheck enables a domain-blocklist (DNSBL, e.g. Spamhaus DBL) lookup that
+	// adds `blocklisted` evidence and caps the score for listed domains (off by
+	// default; adds one external DNS lookup per verification).
+	DNSBLCheck bool
 	// Store selects the backend for the result cache and idempotency store:
 	// "memory" (default) or "postgres".
 	Store string
@@ -181,6 +186,9 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if cfg.GravatarCheck, err = parseBool(lookup, EnvGravatarCheck, false); err != nil {
+		return nil, err
+	}
+	if cfg.DNSBLCheck, err = parseBool(lookup, EnvDNSBLCheck, false); err != nil {
 		return nil, err
 	}
 	if cfg.DomainHealth, err = parseBool(lookup, EnvDomainHealth, false); err != nil {
