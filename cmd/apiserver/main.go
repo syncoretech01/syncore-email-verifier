@@ -72,6 +72,14 @@ func main() {
 	if cfg.DNSBLCheck {
 		verification.WithDNSBLCheck(spamhausDBLLookup)(svc)
 	}
+	// Optional per-domain MX cache: collapses repeat MX lookups for addresses that
+	// share a domain (e.g. within a batch). Held for the purger below.
+	var mxCache *store.Memory[verification.MXCacheEntry]
+	if cfg.MXCacheTTL > 0 {
+		mxCache = store.NewMemory[verification.MXCacheEntry](int(cfg.CacheMaxEntries))
+		verification.WithMXCache(mxCache, cfg.MXCacheTTL)(svc)
+		log.Printf("per-domain MX cache enabled (ttl=%s)", cfg.MXCacheTTL)
+	}
 
 	// Structured logs + a dependency-free metrics registry.
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -148,6 +156,26 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Optional background retention sweep: proactively drops expired entries from
+	// the in-memory stores so freed memory isn't held until the next access. Only
+	// stores implementing store.Purger (the in-memory backend) are swept; the
+	// Postgres backend manages expiry in the database. Stops on shutdown.
+	if cfg.PurgeInterval > 0 {
+		var purgers []store.Purger
+		for _, s := range []any{cacheStore, idemStore} {
+			if p, ok := s.(store.Purger); ok {
+				purgers = append(purgers, p)
+			}
+		}
+		if mxCache != nil {
+			purgers = append(purgers, mxCache)
+		}
+		if len(purgers) > 0 {
+			go runPurger(ctx, cfg.PurgeInterval, purgers...)
+			log.Printf("retention sweep enabled (interval=%s)", cfg.PurgeInterval)
+		}
+	}
+
 	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("Syncore email verifier listening on http://%s", cfg.BindAddr)
@@ -170,6 +198,23 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown error: %v", err)
+	}
+}
+
+// runPurger sweeps the given stores every interval until ctx is cancelled,
+// dropping expired entries so memory isn't held between accesses.
+func runPurger(ctx context.Context, interval time.Duration, purgers ...store.Purger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, p := range purgers {
+				p.PurgeExpired()
+			}
+		}
 	}
 }
 

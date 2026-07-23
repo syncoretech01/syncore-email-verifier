@@ -2,6 +2,12 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Domain MX cache + retention sweep (Phase 6)
+
+- **`SYNCORE_VERIFIER_MX_CACHE_TTL`** (off by default) enables a per-domain MX-lookup cache. Successful MX resolutions are cached for the TTL, so multiple addresses sharing a domain (common within a batch) resolve MX once instead of per-address. Transient DNS failures are **never** cached, so a recovered domain isn't stuck as `unknown`. Operational only — evidence and classification are unchanged.
+- **`SYNCORE_VERIFIER_PURGE_INTERVAL`** (off by default) runs a background sweep that proactively drops expired entries from the in-memory stores (result cache, idempotency, MX cache) so freed memory isn't held until the next access. Only the in-memory backend is swept (Postgres expires in-DB); the sweep stops on shutdown.
+- Both additive and config-flagged; no new dependency.
+
 ## Domain blocklist (DNSBL) check (Phase 6)
 
 - **`SYNCORE_VERIFIER_DNSBL_CHECK`** (off by default) enables a Spamhaus DBL domain-blocklist lookup. A domain on the blocklist (spam/phishing/malware) is surfaced as `domain.blocklisted: true` and its `deliverability_score` is capped (a strong "do not send" signal); the classification is never changed.

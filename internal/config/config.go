@@ -29,6 +29,8 @@ const (
 	EnvAuthToken            = "SYNCORE_VERIFIER_AUTH_TOKEN"
 	EnvCacheTTL             = "SYNCORE_VERIFIER_CACHE_TTL"
 	EnvCacheTTLUnknown      = "SYNCORE_VERIFIER_CACHE_TTL_UNKNOWN"
+	EnvMXCacheTTL           = "SYNCORE_VERIFIER_MX_CACHE_TTL"
+	EnvPurgeInterval        = "SYNCORE_VERIFIER_PURGE_INTERVAL"
 	EnvCacheMaxEntries      = "SYNCORE_VERIFIER_CACHE_MAX_ENTRIES"
 	EnvBatchMaxItems        = "SYNCORE_VERIFIER_BATCH_MAX_ITEMS"
 	EnvBatchConcurrency     = "SYNCORE_VERIFIER_BATCH_CONCURRENCY"
@@ -72,6 +74,12 @@ type Config struct {
 	// CacheTTLUnknown is the lifetime of a cached retryable (unknown) result.
 	// Zero lets the cache derive min(CacheTTL, 1m).
 	CacheTTLUnknown time.Duration
+	// MXCacheTTL is the lifetime of a per-domain MX resolution cache entry, so
+	// addresses sharing a domain reuse one lookup. Zero disables it.
+	MXCacheTTL time.Duration
+	// PurgeInterval is how often the background sweeper drops expired in-memory
+	// cache entries. Zero disables the sweeper (entries still expire on access).
+	PurgeInterval time.Duration
 	// CacheMaxEntries bounds the in-memory result cache.
 	CacheMaxEntries int64
 	// BatchMaxItems caps the number of emails a single batch request may carry.
@@ -168,6 +176,12 @@ func loadFrom(lookup func(string) (string, bool)) (*Config, error) {
 		return nil, err
 	}
 	if cfg.CacheTTL, err = parseOptionalDuration(lookup, EnvCacheTTL, 0); err != nil {
+		return nil, err
+	}
+	if cfg.MXCacheTTL, err = parseOptionalDuration(lookup, EnvMXCacheTTL, 0); err != nil {
+		return nil, err
+	}
+	if cfg.PurgeInterval, err = parseOptionalDuration(lookup, EnvPurgeInterval, 0); err != nil {
 		return nil, err
 	}
 	if cfg.CacheTTLUnknown, err = parseOptionalDuration(lookup, EnvCacheTTLUnknown, 0); err != nil {

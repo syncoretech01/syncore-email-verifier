@@ -104,3 +104,43 @@ func TestMemory_ReSetKeepsSingleEntry(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "v2", got)
 }
+
+func TestMemory_PurgeExpired(t *testing.T) {
+	clk := newClock()
+	m := NewMemory[string](10, WithClock[string](clk.now))
+	mustSet(t, m, "short", "a", time.Minute)
+	mustSet(t, m, "long", "b", time.Hour)
+	require.Equal(t, 2, m.Len())
+
+	clk.add(2 * time.Minute) // "short" expired, "long" still live
+
+	removed := m.PurgeExpired()
+	assert.Equal(t, 1, removed)
+	assert.Equal(t, 1, m.Len())
+
+	// The live entry is still retrievable; the expired one is gone.
+	v, ok := mustGet(t, m, "long")
+	assert.True(t, ok)
+	assert.Equal(t, "b", v)
+	_, ok = mustGet(t, m, "short")
+	assert.False(t, ok)
+
+	// Insertion order is consistent: adding past the cap evicts "long" (the only
+	// remaining key), not a stale purged key.
+	m2 := NewMemory[string](2, WithClock[string](clk.now))
+	mustSet(t, m2, "x", "1", time.Minute)
+	mustSet(t, m2, "y", "2", time.Hour)
+	clk.add(2 * time.Minute) // "x" expired
+	m2.PurgeExpired()
+	mustSet(t, m2, "z", "3", time.Hour)
+	mustSet(t, m2, "w", "4", time.Hour) // cap=2 -> evicts oldest live key "y"
+	_, ok = mustGet(t, m2, "y")
+	assert.False(t, ok)
+	_, okZ := mustGet(t, m2, "z")
+	_, okW := mustGet(t, m2, "w")
+	assert.True(t, okZ)
+	assert.True(t, okW)
+}
+
+// Memory satisfies the Purger interface.
+var _ Purger = (*Memory[string])(nil)

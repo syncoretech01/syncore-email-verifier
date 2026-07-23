@@ -12,7 +12,15 @@ import (
 
 	emailverifier "github.com/AfterShip/email-verifier"
 	"github.com/AfterShip/email-verifier/internal/classify"
+	"github.com/AfterShip/email-verifier/internal/store"
 )
+
+// MXCacheEntry is a cached domain-level MX resolution. Caching it lets many
+// addresses at the same domain (e.g. within one batch) reuse a single MX lookup.
+type MXCacheEntry struct {
+	MX  *emailverifier.Mx
+	DNS classify.DNSOutcome
+}
 
 // Engine is the subset of *emailverifier.Verifier the service depends on. Using
 // the granular methods (rather than the monolithic Verify) lets the service
@@ -141,6 +149,8 @@ type Service struct {
 	reputation   func(domain string) (DomainReputationEvidence, bool)
 	gravatar     func(email string) (hasGravatar bool, url string)
 	dnsbl        func(domain string) (blocklisted bool, err error)
+	mxCache      store.Store[MXCacheEntry]
+	mxCacheTTL   time.Duration
 }
 
 // Option configures a Service.
@@ -206,6 +216,19 @@ func WithDNSBLCheck(fn func(domain string) (blocklisted bool, err error)) Option
 	return func(s *Service) { s.dnsbl = fn }
 }
 
+// WithMXCache enables a per-domain MX resolution cache so multiple addresses at
+// the same domain (e.g. within a batch) share one MX lookup. Only successful
+// resolutions are cached (transient/failed lookups are always re-tried). A
+// non-positive ttl disables it.
+func WithMXCache(cache store.Store[MXCacheEntry], ttl time.Duration) Option {
+	return func(s *Service) {
+		if cache != nil && ttl > 0 {
+			s.mxCache = cache
+			s.mxCacheTTL = ttl
+		}
+	}
+}
+
 // NewService builds a Service. By default SMTP checks are enabled, CheckedAt
 // uses the wall clock in UTC, and domain-health checks are off.
 func NewService(engine Engine, opts ...Option) *Service {
@@ -250,17 +273,32 @@ func (s *Service) Verify(ctx context.Context, rawEmail string) Assessment {
 	ev.Disposable = s.engine.IsDisposable(syntax.Domain)
 	ev.Suggestion = s.engine.SuggestDomain(syntax.Domain)
 
-	// DNS / MX resolution.
-	mx, mxErr := s.engine.CheckMX(syntax.Domain)
+	// DNS / MX resolution, with an optional per-domain cache so addresses that
+	// share a domain reuse one lookup.
+	var mx *emailverifier.Mx
+	resolved := false
+	if s.mxCache != nil {
+		if c, ok, _ := s.mxCache.Get(ctx, syntax.Domain); ok {
+			mx, ev.DNS, resolved = c.MX, c.DNS, true
+		}
+	}
+	if !resolved {
+		m, mxErr := s.engine.CheckMX(syntax.Domain)
+		mx = m
+		if mxErr != nil {
+			ev.DNS = classifyDNSError(mxErr)
+		} else {
+			ev.DNS = classify.DNSResolved
+			// Cache only successful resolutions; transient/failed lookups retry.
+			if s.mxCache != nil {
+				_ = s.mxCache.Set(ctx, syntax.Domain, MXCacheEntry{MX: mx, DNS: ev.DNS}, s.mxCacheTTL)
+			}
+		}
+	}
 	if mx != nil {
 		ev.HasMXRecords = mx.HasMXRecord
 		ev.NullMX = mx.NullMX
 		ev.MailHostSource = classify.MailHostSource(mx.MailHostSource)
-	}
-	if mxErr != nil {
-		ev.DNS = classifyDNSError(mxErr)
-	} else {
-		ev.DNS = classify.DNSResolved
 	}
 
 	// Decide whether to run an SMTP recipient check. Short-circuits set an
