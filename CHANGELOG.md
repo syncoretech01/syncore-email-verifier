@@ -2,6 +2,11 @@
 
 Syncore Email Verifier is a customized internal fork of [AfterShip/email-verifier](https://github.com/AfterShip/email-verifier). The upstream MIT licence and attribution are preserved; upstream release notes follow below.
 
+## Browser console (Phase 6)
+
+- **`SYNCORE_VERIFIER_DEV_CONSOLE`** (off by default) serves a small single-page browser console at `GET /`. Enter an email, click **Verify**, and it renders the `POST /v1/verifications` assessment as a status badge, a metrics strip, per-section tables, and a raw-JSON toggle; recent lookups are remembered locally.
+- The page is embedded in the binary (no runtime asset path), same-origin (so its API call needs no CORS), and served with a strict CSP and `nosniff`. It carries no data itself and still passes through auth/rate-limit like any other route, so it's intended for local use — when auth is enabled, fill the console's token field. Additive and config-flagged; no new dependency.
+
 ## Domain MX cache + retention sweep (Phase 6)
 
 - **`SYNCORE_VERIFIER_MX_CACHE_TTL`** (off by default) enables a per-domain MX-lookup cache. Successful MX resolutions are cached for the TTL, so multiple addresses sharing a domain (common within a batch) resolve MX once instead of per-address. Transient DNS failures are **never** cached, so a recovered domain isn't stuck as `unknown`. Operational only — evidence and classification are unchanged.

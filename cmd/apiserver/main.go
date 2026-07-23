@@ -150,7 +150,11 @@ func main() {
 		feedbackStore:        feedbackStore,
 		feedbackKey:          []byte(cfg.FeedbackSigningKey),
 		feedbackAdapterToken: []byte(cfg.FeedbackAdapterToken),
+		devConsole:           cfg.DevConsole,
 	})
+	if cfg.DevConsole {
+		log.Printf("dev console enabled at GET http://%s/", cfg.BindAddr)
+	}
 	server := newServer(cfg, handlers)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -79,6 +79,8 @@ type Handlers struct {
 	// ingestion adapters (POST /v1/feedback/ses and /v1/feedback/smartlead).
 	// Empty disables those endpoints.
 	feedbackAdapterToken []byte
+	// devConsole enables the browser console at GET /. Off by default.
+	devConsole bool
 }
 
 // handlerOpts are the dependencies for the HTTP handlers. Optional fields may be
@@ -100,6 +102,7 @@ type handlerOpts struct {
 	feedbackStore        *feedback.Store
 	feedbackKey          []byte
 	feedbackAdapterToken []byte
+	devConsole           bool
 }
 
 func newHandlers(o handlerOpts) *Handlers {
@@ -138,6 +141,7 @@ func newHandlers(o handlerOpts) *Handlers {
 		feedbackStore:        o.feedbackStore,
 		feedbackKey:          o.feedbackKey,
 		feedbackAdapterToken: o.feedbackAdapterToken,
+		devConsole:           o.devConsole,
 	}
 }
 
