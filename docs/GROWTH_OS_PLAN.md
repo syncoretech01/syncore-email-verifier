@@ -1,5 +1,13 @@
 # Growth OS Plan (Reconstructed)
 
+> **Superseded for forward planning.** This file records the *pre-v9.1*
+> enterprise effort and its own EV0–EV4 numbering. The current repo-scoped plan,
+> aligned to Growth OS Plan v9.1, is [`GROWTH_OS_PLAN_v9.1.md`](GROWTH_OS_PLAN_v9.1.md);
+> the verified state of the code is [`../INVENTORY.md`](../INVENTORY.md). Note the
+> two documents number their phases differently — this file's EV2 is the sync
+> batch endpoint, whereas v9.1's EV2 is batch *timing correctness*. Keep this
+> file for the historical record of what shipped in PR #4.
+>
 > **Reconstructed document.** The original `GROWTH_OS_PLAN` was never committed to this repository. This file reconstructs the plan's scope and intent from the implementation and status records — [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and [`REMAINING_WORK.md`](REMAINING_WORK.md) — so the repo has an **auditable source of truth** to check the code against. Where this differs from the original intent, the status/remaining docs are authoritative for *what shipped*.
 >
 > Delivered on branch `feature/growth-os-foundation`, **merged into `main` via PR #4** (merge commit `ec8ac5b`). Companion planning docs: [`ROADMAP.md`](ROADMAP.md) (full enterprise plan) and [`LOW_COST_ROADMAP.md`](LOW_COST_ROADMAP.md) (cost-optimized path).
